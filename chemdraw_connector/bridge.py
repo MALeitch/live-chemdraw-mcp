@@ -59,6 +59,7 @@ class ChemDrawBridge:
         self._last_snapshot = None  # for diff_since_last_check
         self._doc_name = None  # tracked working document (see _doc)
         self._caches = {}  # doc.name -> targets.py unit/atom/bond cache
+        self._last_backup = {}  # doc.name -> {"sig": ..., "path": ...}
 
     # ---------- plumbing ----------
 
@@ -70,6 +71,26 @@ class ChemDrawBridge:
         tracks, so switching the active document can never serve one
         document's cached units for another."""
         return self._caches.setdefault(doc.name, {})
+
+    def _maybe_snapshot(self, doc):
+        """Backup-on-mutation, debounced: reuse the last backup's path when
+        doc_signature(doc) hasn't changed since it was taken (same
+        signature check as the unit/atom/bond cache), instead of
+        re-exporting + rewriting a fresh CDXML file on every mutating call
+        in a rapid chain. When a fresh backup IS needed, the COM export
+        happens here (must run on the worker thread) but the disk write is
+        handed off (see snapshots.write_backup_file(wait=False)) so a slow
+        disk never blocks the worker thread. Worker thread only."""
+        sig = targets.doc_signature(doc)
+        last = self._last_backup.get(doc.name)
+        if last is not None and last["sig"] == sig:
+            return last["path"]
+        text = snapshots.export_cdxml_text(doc)
+        if text is None:
+            return None
+        path = snapshots.write_backup_file(doc.name, text, wait=False)
+        self._last_backup[doc.name] = {"sig": sig, "path": path}
+        return path
 
     def _nudge_chemdraw(self):
         """Break ChemDraw out of an interactive block (in-canvas text edit).
@@ -700,7 +721,7 @@ class ChemDrawBridge:
         # (handled by _reresolve_after_mutation), not the other units'.
         def prep():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             units = targets.resolve(doc, target, self._cache_for(doc))
             return doc, backup, [(u, targets.ensure_id(u)) for u in units]
         doc, backup, unit_pairs = self._run(prep, timeout=SLOW_TIMEOUT)
@@ -728,7 +749,7 @@ class ChemDrawBridge:
         # resolved once up front rather than re-looked-up per call).
         def prep():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             units = targets.resolve(doc, target, self._cache_for(doc))
             return doc, backup, [(u, targets.ensure_id(u)) for u in units]
         doc, backup, unit_pairs = self._run(prep, timeout=SLOW_TIMEOUT)
@@ -778,7 +799,7 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             units = targets.resolve(doc, target, self._cache_for(doc))
             allowed_ids = (None if target == "document" else
                           {targets.ensure_id(u) for u in units})
@@ -864,7 +885,7 @@ class ChemDrawBridge:
         # reports ChemDraw as hung when it is merely busy.
         def prep():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             units = targets.resolve(doc, target, self._cache_for(doc))
             return backup, [(u, targets.ensure_id(u)) for u in units]
         backup, unit_pairs = self._run(prep, timeout=SLOW_TIMEOUT)
@@ -1072,7 +1093,7 @@ class ChemDrawBridge:
         """items: list of {object_id, label?}."""
         def go():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             units = [targets.find_by_id(doc, it["object_id"], self._cache_for(doc)) for it in items]
             boxes = [
                 layout_math.Box(u.Left, u.Top, u.Right, u.Bottom) for u in units
@@ -1108,7 +1129,7 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             inserted = []
             for rep, fmt, label in validated:
                 units = self._insert_structure_units(doc, rep, fmt)
@@ -1232,7 +1253,7 @@ class ChemDrawBridge:
         """
         def go():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             before = state.build_snapshot(doc)
 
             # Resolve every target ONCE via a single document-wide scan,
@@ -1270,7 +1291,7 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             settings = doc.Settings
             applied, skipped = {}, {}
             for key, value in values.items():
@@ -1306,7 +1327,7 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            backup = snapshots.snapshot_document(doc)
+            backup = self._maybe_snapshot(doc)
             x, y = 60.0, 120.0
             gap = 24.0
             ids = []

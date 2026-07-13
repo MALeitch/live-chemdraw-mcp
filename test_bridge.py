@@ -86,6 +86,21 @@ def main():
     check("select aspirin (watch highlight)", lambda: b.select(asp_id))
     check("get_selection", b.get_selection)
 
+    print("== backup debounce ==")
+    # Two move_objects calls in a row that don't change any atom/group/bond
+    # count: the second should reuse the first's backup rather than
+    # re-exporting + rewriting a fresh CDXML file.
+    mv1 = check("move_objects (first)", lambda: b.move_objects(
+        [{"object_id": etoh_id, "dx": 5, "dy": 0}]))
+    mv2 = check("move_objects (second, nothing else changed)", lambda: b.move_objects(
+        [{"object_id": etoh_id, "dx": 5, "dy": 0}]))
+    if mv1 and mv2:
+        assert mv1.get("backup_path") and mv2.get("backup_path"), "no backup written"
+        assert mv1["backup_path"] == mv2["backup_path"], (
+            "backup should be debounced (reused) when the document's "
+            "signature hasn't changed between mutating calls"
+        )
+
     print("== atom/bond editing ==")
     check("edit_atom: benzene C1 -> N (pyridine)",
           lambda: b.edit_atom(benz_id, 1, element="N"))
