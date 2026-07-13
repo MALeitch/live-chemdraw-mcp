@@ -123,12 +123,6 @@ def register(mcp, bridge):
     def chemdraw_copy_to_clipboard(target: str = "selection") -> str:
         return as_json(bridge.copy_to_clipboard(_parse(target)))
 
-    @mcp.tool()
-    def chemdraw_list_objects() -> str:
-        """List every structure on the page with id, formula, counts, and
-        position — including ones the user drew by hand."""
-        return as_json(bridge.list_objects())
-
     @mcp.tool(description=(
         "Transform structures. action: move (dx/dy points) | rotate (degrees) "
         "| scale (factor) | flip (vertical=true for vertical) | clean (tidy "

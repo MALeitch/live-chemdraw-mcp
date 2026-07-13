@@ -50,8 +50,24 @@ def main():
     etoh_id = etoh["inserted"][0]["id"] if etoh else None
 
     print("== state / list ==")
-    check("get_document_state", b.get_document_state)
-    check("list_objects", b.list_objects)
+    state_before = check("get_document_state", b.get_document_state)
+
+    print("== cache correctness: hand-edit visibility ==")
+    # b caches unit membership (see targets.doc_signature); a second bridge
+    # mutating the SAME live document stands in for a hand edit or another
+    # agent acting between b's tool calls. b's next read must see it —
+    # proving the signature check, not a stale flag, gates the cache.
+    b2 = ChemDrawBridge()
+    check("second bridge inserts a structure (simulated hand edit)",
+          lambda: b2.insert_structure("CC(=O)O", "smiles", (500, 500)))
+    state_after = check("get_document_state (after simulated hand edit)",
+                        b.get_document_state)
+    if state_before and state_after:
+        assert len(state_after["structures"]) == len(state_before["structures"]) + 1, (
+            "b's cached unit list did not pick up the structure b2 inserted "
+            f"into the same document: before={len(state_before['structures'])} "
+            f"after={len(state_after['structures'])}"
+        )
 
     print("== export / properties ==")
     exp = check("export aspirin smiles", lambda: b.export_structure("smiles", asp_id))

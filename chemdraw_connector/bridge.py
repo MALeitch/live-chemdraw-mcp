@@ -58,8 +58,18 @@ class ChemDrawBridge:
         self._worker = ComWorker(unblock_hook=self._nudge_chemdraw)
         self._last_snapshot = None  # for diff_since_last_check
         self._doc_name = None  # tracked working document (see _doc)
+        self._caches = {}  # doc.name -> targets.py unit/atom/bond cache
 
     # ---------- plumbing ----------
+
+    def _cache_for(self, doc):
+        """Per-document cache passed to targets.iter_units/resolve/
+        find_by_id/unit_atoms_bonds so repeated calls skip full-document
+        COM rescans when nothing has changed (see targets.doc_signature).
+        Keyed by doc.name, the same document-identity key _doc() itself
+        tracks, so switching the active document can never serve one
+        document's cached units for another."""
+        return self._caches.setdefault(doc.name, {})
 
     def _nudge_chemdraw(self):
         """Break ChemDraw out of an interactive block (in-canvas text edit).
@@ -184,7 +194,7 @@ class ChemDrawBridge:
             info["active_document"] = doc.name if doc is not None else None
             info["open_documents"] = app.Documents.Count
             if doc is not None:
-                info["structures_on_page"] = len(targets.iter_units(doc))
+                info["structures_on_page"] = len(targets.iter_units(doc, self._cache_for(doc)))
                 info["chemical_warnings"] = doc.NumChemicalWarnings
             return info
         return self._run(go)
@@ -287,14 +297,14 @@ class ChemDrawBridge:
     def get_selection(self):
         def go():
             doc = self._doc()
-            units = targets.resolve(doc, "selection")
+            units = targets.resolve(doc, "selection", self._cache_for(doc))
             return {"selected": self._describe_units(doc, units)}
         return self._run(go)
 
     def select(self, object_id):
         def go():
             doc = self._doc()
-            unit = targets.find_by_id(doc, object_id)
+            unit = targets.find_by_id(doc, object_id, self._cache_for(doc))
             targets.unit_objects(unit).Select()
             return {"selected": object_id}
         return self._run(go)
@@ -357,7 +367,7 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             mime = t.mime_for(fmt)
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             out = []
             for u in units:
                 data = targets.unit_objects(u).GetData(mime)
@@ -375,7 +385,7 @@ class ChemDrawBridge:
             if target == "document":
                 objs = doc.Objects
             else:
-                units = targets.resolve(doc, target)
+                units = targets.resolve(doc, target, self._cache_for(doc))
                 if len(units) == 1:
                     objs = targets.unit_objects(units[0])
                 else:
@@ -403,18 +413,12 @@ class ChemDrawBridge:
     def copy_to_clipboard(self, target="selection"):
         def go():
             doc = self._doc()
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             for u in units:
                 targets.unit_objects(u).Select()
             doc.Selection.Objects.Copy()
             return {"copied": [targets.ensure_id(u) for u in units]}
         return self._run(go)
-
-    def list_objects(self):
-        def go():
-            doc = self._doc()
-            return {"structures": state.build_snapshot(doc)}
-        return self._run(go, timeout=SLOW_TIMEOUT)
 
     # ---------- properties / analysis / QC ----------
 
@@ -422,7 +426,7 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             out = []
-            for u in targets.resolve(doc, target):
+            for u in targets.resolve(doc, target, self._cache_for(doc)):
                 objs = targets.unit_objects(u)
                 out.append({
                     "id": targets.ensure_id(u),
@@ -439,7 +443,7 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             out = []
-            for u in targets.resolve(doc, target):
+            for u in targets.resolve(doc, target, self._cache_for(doc)):
                 data = targets.unit_objects(u).GetData(t.mime_for(fmt))
                 out.append({"id": targets.ensure_id(u), "name": _com_text(data)})
             return {"names": out}
@@ -476,8 +480,8 @@ class ChemDrawBridge:
                 ]
             else:
                 collections = []
-                for u in targets.resolve(doc, target):
-                    atoms, bonds = targets.unit_atoms_bonds(doc, u)
+                for u in targets.resolve(doc, target, self._cache_for(doc)):
+                    atoms, bonds = targets.unit_atoms_bonds(doc, u, self._cache_for(doc))
                     collections.extend([(atoms, "atom"), (bonds, "bond")])
             for coll, kind in collections:
                 for i, item in enumerate(coll, start=1):
@@ -499,7 +503,7 @@ class ChemDrawBridge:
                   degrees=0.0, factor=1.0, vertical=False):
         def go():
             doc = self._doc()
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             for u in units:
                 objs = targets.unit_objects(u)
                 if action == "move":
@@ -523,7 +527,7 @@ class ChemDrawBridge:
     def remove(self, target):
         def go():
             doc = self._doc()
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             ids = [targets.ensure_id(u) for u in units]
             for u in units:
                 targets.unit_objects(u).Clear()
@@ -535,8 +539,8 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target)[0]
-            atoms, _ = targets.unit_atoms_bonds(doc, unit)
+            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
+            atoms, _ = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
             if not 1 <= atom_index <= len(atoms):
                 raise ValueError(
                     f"atom_index {atom_index} out of range 1..{len(atoms)}")
@@ -559,8 +563,8 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target)[0]
-            _, bonds = targets.unit_atoms_bonds(doc, unit)
+            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
+            _, bonds = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
             if not 1 <= bond_index <= len(bonds):
                 raise ValueError(
                     f"bond_index {bond_index} out of range 1..{len(bonds)}")
@@ -581,8 +585,8 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target)[0]
-            atoms, _ = targets.unit_atoms_bonds(doc, unit)
+            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
+            atoms, _ = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
             if not 1 <= attach_to_atom_index <= len(atoms):
                 raise ValueError(
                     f"attach_to_atom_index {attach_to_atom_index} out of range "
@@ -603,7 +607,7 @@ class ChemDrawBridge:
                 "id": targets.ensure_id(unit),
                 "added_element": element,
                 "bond_order": bond_order,
-                "atom_count": len(targets.unit_atoms_bonds(doc, unit)[0]),
+                "atom_count": len(targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))[0]),
             }
         return self._run(go, timeout=SLOW_TIMEOUT)
 
@@ -613,8 +617,8 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             out = []
-            for u in targets.resolve(doc, target):
-                unit_atoms, unit_bonds = targets.unit_atoms_bonds(doc, u)
+            for u in targets.resolve(doc, target, self._cache_for(doc)):
+                unit_atoms, unit_bonds = targets.unit_atoms_bonds(doc, u, self._cache_for(doc))
                 atoms = []
                 for i, a in enumerate(unit_atoms, start=1):
                     descriptor = t.ATOM_CIP_NAMES.get(int(a.Stereochemistry or 0))
@@ -643,8 +647,8 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target)[0]
-            _, bonds = targets.unit_atoms_bonds(doc, unit)
+            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
+            _, bonds = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
             if not 1 <= bond_index <= len(bonds):
                 raise ValueError(
                     f"bond_index {bond_index} out of range 1..{len(bonds)}")
@@ -697,7 +701,7 @@ class ChemDrawBridge:
         def prep():
             doc = self._doc()
             backup = snapshots.snapshot_document(doc)
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             return doc, backup, [(u, targets.ensure_id(u)) for u in units]
         doc, backup, unit_pairs = self._run(prep, timeout=SLOW_TIMEOUT)
 
@@ -725,7 +729,7 @@ class ChemDrawBridge:
         def prep():
             doc = self._doc()
             backup = snapshots.snapshot_document(doc)
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             return doc, backup, [(u, targets.ensure_id(u)) for u in units]
         doc, backup, unit_pairs = self._run(prep, timeout=SLOW_TIMEOUT)
 
@@ -775,7 +779,7 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             backup = snapshots.snapshot_document(doc)
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             allowed_ids = (None if target == "document" else
                           {targets.ensure_id(u) for u in units})
 
@@ -817,7 +821,7 @@ class ChemDrawBridge:
             # old-id -> new-id mapping the way a single-unit mutation does,
             # so every touched (and untouched) unit is simply re-scanned
             # once and any orphaned tag replaced.
-            for u in targets.iter_units(doc):
+            for u in targets.iter_units(doc, self._cache_for(doc)):
                 targets.ensure_id(u)
             return {
                 "expanded_labels": counts,
@@ -861,7 +865,7 @@ class ChemDrawBridge:
         def prep():
             doc = self._doc()
             backup = snapshots.snapshot_document(doc)
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             return backup, [(u, targets.ensure_id(u)) for u in units]
         backup, unit_pairs = self._run(prep, timeout=SLOW_TIMEOUT)
 
@@ -908,7 +912,7 @@ class ChemDrawBridge:
         """
         doc = self._doc()
         if unit is None:
-            unit = targets.find_by_id(doc, uid)
+            unit = targets.find_by_id(doc, uid, self._cache_for(doc))
         cdxml = _com_text(
             targets.unit_objects(unit).GetData(t.mime_for("cdxml")))
         if not cdxml.strip():
@@ -1069,7 +1073,7 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             backup = snapshots.snapshot_document(doc)
-            units = [targets.find_by_id(doc, it["object_id"]) for it in items]
+            units = [targets.find_by_id(doc, it["object_id"], self._cache_for(doc)) for it in items]
             boxes = [
                 layout_math.Box(u.Left, u.Top, u.Right, u.Bottom) for u in units
             ]
@@ -1138,7 +1142,7 @@ class ChemDrawBridge:
                    bold=True):
         def go():
             doc = self._doc()
-            units = targets.resolve(doc, target)
+            units = targets.resolve(doc, target, self._cache_for(doc))
             # Reading order: top-to-bottom rows, then left-to-right.
             units.sort(key=lambda u: (round(u.Top / 40.0), u.Left))
             labels = numbering.make_labels(len(units), start=start, scheme=scheme)
@@ -1177,7 +1181,7 @@ class ChemDrawBridge:
                 structures = state.build_snapshot(doc)
             else:
                 structures = [state.describe_unit(u, w, h)
-                             for u in targets.resolve(doc, target)]
+                             for u in targets.resolve(doc, target, self._cache_for(doc))]
 
             captions = []
             for i in range(1, doc.Captions.Count + 1):
@@ -1234,7 +1238,7 @@ class ChemDrawBridge:
             # Resolve every target ONCE via a single document-wide scan,
             # not once per move (same lesson as contract_functional_groups'
             # earlier find_by_id-per-pass inefficiency).
-            by_id = {targets.ensure_id(u): u for u in targets.iter_units(doc)}
+            by_id = {targets.ensure_id(u): u for u in targets.iter_units(doc, self._cache_for(doc))}
             applied, missing = [], []
             for mv in moves:
                 oid = mv["object_id"]
