@@ -1,0 +1,16 @@
+[project]
+name = "chemdraw-mcp"
+version = "0.1.0"
+description = "MCP server connecting Claude to a live ChemDraw window via COM automation"
+requires-python = ">=3.12"
+dependencies = [
+    "pywin32>=310",
+    "rdkit>=2024.3",
+    "mcp[cli]>=1.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
