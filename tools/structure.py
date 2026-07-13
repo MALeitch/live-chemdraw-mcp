@@ -1,5 +1,6 @@
 """Document/session, selection, structure I/O, and manipulation tools."""
 import base64
+import json
 
 from mcp.server.fastmcp import Image
 
@@ -174,6 +175,33 @@ def register(mcp, bridge):
                            bond_order: str = "") -> str:
         return as_json(bridge.edit_bond(_parse(target), bond_index,
                                         bond_order or None))
+
+    @mcp.tool(description=(
+        "Apply many atom edits in ONE call instead of one call per atom — "
+        "the fast path once chemdraw_list_atoms has given you the refs for "
+        "everything you need to change. edits_json: JSON list like "
+        "[{\"target\": \"claude-...\", \"atom\": \"a42\", \"element\": "
+        "\"N\"}, {\"target\": \"claude-...\", \"atom\": \"a57\", "
+        "\"set_charge\": true, \"charge\": -1}, ...] (atom accepts a ref "
+        "or a 1-based index). Returns `applied` and `failed` per-item, "
+        "plus `unexpected_changes` — any structure that changed WITHOUT "
+        "being in your list — the same before/after diff "
+        "chemdraw_move_objects uses."))
+    def chemdraw_edit_atoms(edits_json: str) -> str:
+        return as_json(bridge.edit_atoms(json.loads(edits_json)))
+
+    @mcp.tool(description=(
+        "Apply many bond edits in ONE call instead of one call per bond — "
+        "the fast path once chemdraw_list_atoms has given you the refs for "
+        "everything you need to change. edits_json: JSON list like "
+        "[{\"target\": \"claude-...\", \"bond\": \"b12-45\", "
+        "\"bond_order\": \"double\"}, ...] (bond accepts a ref or a "
+        "1-based index). Returns `applied` and `failed` per-item, plus "
+        "`unexpected_changes` — any structure that changed WITHOUT being "
+        "in your list — the same before/after diff chemdraw_move_objects "
+        "uses."))
+    def chemdraw_edit_bonds(edits_json: str) -> str:
+        return as_json(bridge.edit_bonds(json.loads(edits_json)))
 
     @mcp.tool(description=(
         "Grow a structure by bonding a new atom to an existing one, then "

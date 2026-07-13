@@ -126,6 +126,35 @@ def main():
         check("edit_bond by ref: back to single",
               lambda: b.edit_bond(etoh_id, bond_ref, "single"))
 
+    print("== batch atom/bond edits ==")
+    asp_listing = check("list_atoms_bonds aspirin", lambda: b.list_atoms_bonds(asp_id))
+    if asp_listing:
+        asp_atoms = asp_listing["structures"][0]["atoms"]
+        asp_bonds = asp_listing["structures"][0]["bonds"]
+        atom_refs = [a["ref"] for a in asp_atoms[:2]]
+        batch_atoms = check(
+            "edit_atoms: batch charge no-op on 2 atoms + 1 deliberately bad ref",
+            lambda: b.edit_atoms([
+                {"target": asp_id, "atom": atom_refs[0], "set_charge": True, "charge": 0},
+                {"target": asp_id, "atom": atom_refs[1], "set_charge": True, "charge": 0},
+                {"target": asp_id, "atom": "a999999", "set_charge": True, "charge": 0},
+            ]))
+        if batch_atoms:
+            assert len(batch_atoms["applied"]) == 2, batch_atoms
+            assert len(batch_atoms["failed"]) == 1, batch_atoms
+            assert batch_atoms.get("backup_path"), "no backup written"
+
+        first_bond = asp_bonds[0]
+        batch_bonds = check(
+            "edit_bonds: batch no-op (restore each bond's own current order)",
+            lambda: b.edit_bonds([
+                {"target": asp_id, "bond": first_bond["ref"],
+                 "bond_order": first_bond["order"]},
+            ]))
+        if batch_bonds:
+            assert len(batch_bonds["applied"]) == 1, batch_bonds
+            assert not batch_bonds["failed"], batch_bonds
+
     print("== stereo ==")
     ala = check("insert L-alanine", lambda: b.insert_structure("C[C@@H](N)C(=O)O"))
     ala_id = ala["inserted"][0]["id"] if ala else None

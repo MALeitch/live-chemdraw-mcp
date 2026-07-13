@@ -597,46 +597,134 @@ class ChemDrawBridge:
             return {"structures": out}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
+    @staticmethod
+    def _apply_atom_edit(doc, cache, edit):
+        """One atom edit, shared by edit_atom and edit_atoms so both stay
+        in lockstep. `edit`: {"target", "atom" (ref or 1-based index),
+        "element"?, "charge"?, "set_charge"?}. Raises on an unresolvable
+        target/atom — edit_atom lets that propagate as before, edit_atoms
+        catches it per-item so one bad entry doesn't fail the whole batch."""
+        unit = targets.resolve(doc, edit["target"], cache)[0]
+        atom, idx = targets.resolve_atom(doc, unit, edit["atom"], cache)
+        if edit.get("element"):
+            atom.ElementNumber = t.element_number(edit["element"])
+        if edit.get("set_charge"):
+            atom.Charge = edit.get("charge", 0)
+        return {
+            "id": targets.ensure_id(unit),
+            "atom_index": idx,
+            "ref": targets.atom_ref(atom),
+            "element": t.element_symbol(atom.ElementNumber),
+            "charge": atom.Charge,
+            "warning": atom.ChemicalWarning or None,
+        }
+
     def edit_atom(self, target, atom_index, element=None, charge=None):
-        elem_num = t.element_number(element) if element else None
+        edit = {"target": target, "atom": atom_index}
+        if element is not None:
+            edit["element"] = element
+        if charge is not None:
+            edit["set_charge"] = True
+            edit["charge"] = charge
 
         def go():
             doc = self._doc()
-            cache = self._cache_for(doc)
-            unit = targets.resolve(doc, target, cache)[0]
-            atom, idx = targets.resolve_atom(doc, unit, atom_index, cache)
-            if elem_num is not None:
-                atom.ElementNumber = elem_num
-            if charge is not None:
-                atom.Charge = charge
-            return {
-                "id": targets.ensure_id(unit),
-                "atom_index": idx,
-                "ref": targets.atom_ref(atom),
-                "element": t.element_symbol(atom.ElementNumber),
-                "charge": atom.Charge,
-                "warning": atom.ChemicalWarning or None,
-            }
+            return self._apply_atom_edit(doc, self._cache_for(doc), edit)
         return self._run(go, timeout=SLOW_TIMEOUT)
+
+    def edit_atoms(self, edits):
+        """Apply many atom edits in ONE COM session instead of one MCP
+        tool call each. edits: [{"target": object_id, "atom": ref or
+        1-based index, "element"?: str, "charge"?: int, "set_charge"?:
+        bool}, ...]. Mirrors move_objects: one shared backup, before/after
+        diff so any change beyond the requested edits surfaces as
+        `unexpected_changes` instead of being discovered later, and a
+        failed item goes into `failed` rather than aborting the batch."""
+        def go():
+            doc = self._doc()
+            cache = self._cache_for(doc)
+            backup = self._maybe_snapshot(doc)
+            before = state.build_snapshot(doc)
+            applied, failed = [], []
+            for e in edits:
+                try:
+                    result = self._apply_atom_edit(doc, cache, e)
+                    result["target"] = e.get("target")
+                    result["atom"] = e.get("atom")
+                    applied.append(result)
+                except Exception as exc:
+                    failed.append({"target": e.get("target"),
+                                   "atom": e.get("atom"), "error": str(exc)})
+            after = state.build_snapshot(doc)
+            d = diff.diff_snapshots(before, after)
+            requested_ids = {r["id"] for r in applied}
+            unexpected = [m for m in d["modified"] if m["id"] not in requested_ids]
+            return {
+                "applied": applied,
+                "failed": failed,
+                "unexpected_changes": unexpected,
+                "backup_path": backup,
+            }
+        return self._run(go, timeout=max(SLOW_TIMEOUT, 2.0 * len(edits)))
+
+    @staticmethod
+    def _apply_bond_edit(doc, cache, edit):
+        """Bond-edit counterpart to _apply_atom_edit, shared by edit_bond
+        and edit_bonds. `edit`: {"target", "bond" (ref or 1-based index),
+        "bond_order"?}."""
+        unit = targets.resolve(doc, edit["target"], cache)[0]
+        bond, idx = targets.resolve_bond(doc, unit, edit["bond"], cache)
+        if edit.get("bond_order"):
+            bond.BondOrder = t.bond_order_value(edit["bond_order"])
+        return {
+            "id": targets.ensure_id(unit),
+            "bond_index": idx,
+            "ref": targets.bond_ref(bond),
+            "bond_order": t.bond_order_name(bond.BondOrder),
+            "warning": bond.ChemicalWarning or None,
+        }
 
     def edit_bond(self, target, bond_index, bond_order=None):
-        order_val = t.bond_order_value(bond_order) if bond_order else None
+        edit = {"target": target, "bond": bond_index}
+        if bond_order is not None:
+            edit["bond_order"] = bond_order
 
         def go():
             doc = self._doc()
-            cache = self._cache_for(doc)
-            unit = targets.resolve(doc, target, cache)[0]
-            bond, idx = targets.resolve_bond(doc, unit, bond_index, cache)
-            if order_val is not None:
-                bond.BondOrder = order_val
-            return {
-                "id": targets.ensure_id(unit),
-                "bond_index": idx,
-                "ref": targets.bond_ref(bond),
-                "bond_order": t.bond_order_name(bond.BondOrder),
-                "warning": bond.ChemicalWarning or None,
-            }
+            return self._apply_bond_edit(doc, self._cache_for(doc), edit)
         return self._run(go, timeout=SLOW_TIMEOUT)
+
+    def edit_bonds(self, edits):
+        """Batch counterpart to edit_bond; see edit_atoms for the shared
+        rationale (one COM session, one backup, before/after diff, partial
+        failure reported per-item). edits: [{"target": object_id, "bond":
+        ref or 1-based index, "bond_order"?: str}, ...]."""
+        def go():
+            doc = self._doc()
+            cache = self._cache_for(doc)
+            backup = self._maybe_snapshot(doc)
+            before = state.build_snapshot(doc)
+            applied, failed = [], []
+            for e in edits:
+                try:
+                    result = self._apply_bond_edit(doc, cache, e)
+                    result["target"] = e.get("target")
+                    result["bond"] = e.get("bond")
+                    applied.append(result)
+                except Exception as exc:
+                    failed.append({"target": e.get("target"),
+                                   "bond": e.get("bond"), "error": str(exc)})
+            after = state.build_snapshot(doc)
+            d = diff.diff_snapshots(before, after)
+            requested_ids = {r["id"] for r in applied}
+            unexpected = [m for m in d["modified"] if m["id"] not in requested_ids]
+            return {
+                "applied": applied,
+                "failed": failed,
+                "unexpected_changes": unexpected,
+                "backup_path": backup,
+            }
+        return self._run(go, timeout=max(SLOW_TIMEOUT, 2.0 * len(edits)))
 
     def add_atom(self, target, attach_to_atom_index, element, bond_order="single"):
         elem_num = t.element_number(element)
