@@ -179,6 +179,73 @@ def unit_atoms_bonds(doc, unit, cache=None):
     return atoms, bonds
 
 
+def atom_ref(atom):
+    """Stable, session-scoped handle for one atom: ChemDraw's own doc-unique
+    Atom.ID, already proven and in production use elsewhere (see
+    bridge._build_handle_map; README confirms it equals the CDXML export
+    node id). Cheaper and simpler than tagging every atom the way units
+    are tagged — tagging is fine at unit granularity (a handful per
+    document) but would add a COM round trip per atom at this scale."""
+    return f"a{atom.ID}"
+
+
+def bond_ref(bond):
+    """Stable, session-scoped handle for one bond. Bond has no equivalent
+    doc-unique .ID of its own (unverified/untrusted — see
+    bridge._build_handle_map, which already avoids it), so this mirrors
+    that exact proven pattern: the sorted pair of its atoms' ids."""
+    a, b = bond.Atom1.ID, bond.Atom2.ID
+    lo, hi = (a, b) if a <= b else (b, a)
+    return f"b{lo}-{hi}"
+
+
+def _as_legacy_index(ref):
+    """A plain 1-based positional index, accepted alongside atom_ref/
+    bond_ref strings for backward compatibility. Tolerates a numeric
+    string too, since MCP tool args often arrive as JSON strings."""
+    if isinstance(ref, bool):
+        return None
+    if isinstance(ref, int):
+        return ref
+    if isinstance(ref, str):
+        s = ref.strip()
+        if s.lstrip("-").isdigit():
+            return int(s)
+    return None
+
+
+def resolve_atom(doc, unit, ref, cache=None):
+    """ref: a 1-based positional index (legacy — recomputed fresh each
+    call, so it can shift as the structure changes) or an atom_ref()
+    string (stable across calls; get one from chemdraw_list_atoms instead
+    of guessing an index). Returns (atom, atom_index)."""
+    atoms, _ = unit_atoms_bonds(doc, unit, cache)
+    idx = _as_legacy_index(ref)
+    if idx is not None:
+        if not 1 <= idx <= len(atoms):
+            raise ValueError(f"atom_index {idx} out of range 1..{len(atoms)}")
+        return atoms[idx - 1], idx
+    for i, atom in enumerate(atoms, start=1):
+        if atom_ref(atom) == ref:
+            return atom, i
+    raise TargetNotFoundError(ref)
+
+
+def resolve_bond(doc, unit, ref, cache=None):
+    """Same contract as resolve_atom, for bonds/bond_ref(). Returns
+    (bond, bond_index)."""
+    _, bonds = unit_atoms_bonds(doc, unit, cache)
+    idx = _as_legacy_index(ref)
+    if idx is not None:
+        if not 1 <= idx <= len(bonds):
+            raise ValueError(f"bond_index {idx} out of range 1..{len(bonds)}")
+        return bonds[idx - 1], idx
+    for i, bond in enumerate(bonds, start=1):
+        if bond_ref(bond) == ref:
+            return bond, i
+    raise TargetNotFoundError(ref)
+
+
 def resolve(doc, target, cache=None):
     """Resolve a target spec to a list of units.
 

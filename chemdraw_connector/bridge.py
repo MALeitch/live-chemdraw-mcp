@@ -555,24 +555,64 @@ class ChemDrawBridge:
             return {"removed": ids}
         return self._run(go)
 
+    def list_atoms_bonds(self, target="selection"):
+        """Enumerate atoms/bonds with stable refs in one call, so editing
+        one doesn't require guessing an index first. atom_index/bond_index
+        are still included (existing edit_atom/edit_bond calls can keep
+        using them) but ref is the one worth keeping across calls — it
+        survives other atoms/bonds being added or removed in between."""
+        def go():
+            doc = self._doc()
+            cache = self._cache_for(doc)
+            out = []
+            for u in targets.resolve(doc, target, cache):
+                atoms, bonds = targets.unit_atoms_bonds(doc, u, cache)
+                atom_entries = []
+                for i, a in enumerate(atoms, start=1):
+                    pos = a.Position
+                    atom_entries.append({
+                        "ref": targets.atom_ref(a),
+                        "atom_index": i,
+                        "element": t.element_symbol(a.ElementNumber),
+                        "charge": a.Charge,
+                        "x": round(pos.X, 2),
+                        "y": round(pos.Y, 2),
+                        "warning": a.ChemicalWarning or None,
+                    })
+                bond_entries = []
+                for i, b in enumerate(bonds, start=1):
+                    bond_entries.append({
+                        "ref": targets.bond_ref(b),
+                        "bond_index": i,
+                        "order": t.bond_order_name(b.BondOrder),
+                        "atom1_ref": targets.atom_ref(b.Atom1),
+                        "atom2_ref": targets.atom_ref(b.Atom2),
+                        "warning": b.ChemicalWarning or None,
+                    })
+                out.append({
+                    "id": targets.ensure_id(u),
+                    "atoms": atom_entries,
+                    "bonds": bond_entries,
+                })
+            return {"structures": out}
+        return self._run(go, timeout=SLOW_TIMEOUT)
+
     def edit_atom(self, target, atom_index, element=None, charge=None):
         elem_num = t.element_number(element) if element else None
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
-            atoms, _ = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
-            if not 1 <= atom_index <= len(atoms):
-                raise ValueError(
-                    f"atom_index {atom_index} out of range 1..{len(atoms)}")
-            atom = atoms[atom_index - 1]
+            cache = self._cache_for(doc)
+            unit = targets.resolve(doc, target, cache)[0]
+            atom, idx = targets.resolve_atom(doc, unit, atom_index, cache)
             if elem_num is not None:
                 atom.ElementNumber = elem_num
             if charge is not None:
                 atom.Charge = charge
             return {
                 "id": targets.ensure_id(unit),
-                "atom_index": atom_index,
+                "atom_index": idx,
+                "ref": targets.atom_ref(atom),
                 "element": t.element_symbol(atom.ElementNumber),
                 "charge": atom.Charge,
                 "warning": atom.ChemicalWarning or None,
@@ -584,17 +624,15 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
-            _, bonds = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
-            if not 1 <= bond_index <= len(bonds):
-                raise ValueError(
-                    f"bond_index {bond_index} out of range 1..{len(bonds)}")
-            bond = bonds[bond_index - 1]
+            cache = self._cache_for(doc)
+            unit = targets.resolve(doc, target, cache)[0]
+            bond, idx = targets.resolve_bond(doc, unit, bond_index, cache)
             if order_val is not None:
                 bond.BondOrder = order_val
             return {
                 "id": targets.ensure_id(unit),
-                "bond_index": bond_index,
+                "bond_index": idx,
+                "ref": targets.bond_ref(bond),
                 "bond_order": t.bond_order_name(bond.BondOrder),
                 "warning": bond.ChemicalWarning or None,
             }
@@ -606,13 +644,9 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
-            atoms, _ = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
-            if not 1 <= attach_to_atom_index <= len(atoms):
-                raise ValueError(
-                    f"attach_to_atom_index {attach_to_atom_index} out of range "
-                    f"1..{len(atoms)}")
-            anchor = atoms[attach_to_atom_index - 1]
+            cache = self._cache_for(doc)
+            unit = targets.resolve(doc, target, cache)[0]
+            anchor, _ = targets.resolve_atom(doc, unit, attach_to_atom_index, cache)
             new_atom = doc.MakeAtom()
             new_atom.ElementNumber = elem_num
             # Place near the anchor; Clean() afterwards fixes geometry.
@@ -628,7 +662,7 @@ class ChemDrawBridge:
                 "id": targets.ensure_id(unit),
                 "added_element": element,
                 "bond_order": bond_order,
-                "atom_count": len(targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))[0]),
+                "atom_count": len(targets.unit_atoms_bonds(doc, unit, cache)[0]),
             }
         return self._run(go, timeout=SLOW_TIMEOUT)
 
@@ -668,16 +702,14 @@ class ChemDrawBridge:
 
         def go():
             doc = self._doc()
-            unit = targets.resolve(doc, target, self._cache_for(doc))[0]
-            _, bonds = targets.unit_atoms_bonds(doc, unit, self._cache_for(doc))
-            if not 1 <= bond_index <= len(bonds):
-                raise ValueError(
-                    f"bond_index {bond_index} out of range 1..{len(bonds)}")
-            bond = bonds[bond_index - 1]
+            cache = self._cache_for(doc)
+            unit = targets.resolve(doc, target, cache)[0]
+            bond, idx = targets.resolve_bond(doc, unit, bond_index, cache)
             bond.BondDisplay = display_val
             return {
                 "id": targets.ensure_id(unit),
-                "bond_index": bond_index,
+                "bond_index": idx,
+                "ref": targets.bond_ref(bond),
                 "display": t.bond_display_name(bond.BondDisplay),
                 "note": "Verify the derived R/S with chemdraw_get_stereochemistry.",
             }

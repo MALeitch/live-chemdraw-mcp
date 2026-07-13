@@ -112,6 +112,20 @@ def main():
           lambda: b.check_warnings("document"))
     check("edit_bond: back to single", lambda: b.edit_bond(etoh_id, 1, "single"))
 
+    print("== stable atom/bond refs (no guess-and-check) ==")
+    listing = check("list_atoms_bonds ethanol", lambda: b.list_atoms_bonds(etoh_id))
+    if listing:
+        entry = listing["structures"][0]
+        assert entry["atoms"] and entry["atoms"][0]["ref"].startswith("a"), entry
+        assert entry["bonds"] and entry["bonds"][0]["ref"].startswith("b"), entry
+        atom_ref = entry["atoms"][0]["ref"]
+        bond_ref = entry["bonds"][0]["ref"]
+        check("edit_atom by ref", lambda: b.edit_atom(etoh_id, atom_ref, element="C"))
+        check("edit_bond by ref (double, then back)",
+              lambda: b.edit_bond(etoh_id, bond_ref, "double"))
+        check("edit_bond by ref: back to single",
+              lambda: b.edit_bond(etoh_id, bond_ref, "single"))
+
     print("== stereo ==")
     ala = check("insert L-alanine", lambda: b.insert_structure("C[C@@H](N)C(=O)O"))
     ala_id = ala["inserted"][0]["id"] if ala else None

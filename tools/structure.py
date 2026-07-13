@@ -141,11 +141,25 @@ def register(mcp, bridge):
         return as_json(bridge.remove(_parse(target)))
 
     @mcp.tool(description=(
+        "List a structure's atoms and bonds in one call: element, charge, "
+        "position, and a stable ref (e.g. 'a42') for each atom; order, "
+        "endpoints, and a stable ref (e.g. 'b12-45') for each bond. Call "
+        "this once before editing atoms/bonds you didn't just create, then "
+        "pass the ref to chemdraw_edit_atom/chemdraw_edit_bond/"
+        "chemdraw_add_atom/chemdraw_set_bond_stereo instead of guessing a "
+        "1-based index. " + TARGET_DOC))
+    def chemdraw_list_atoms(target: str = "selection") -> str:
+        return as_json(bridge.list_atoms_bonds(_parse(target)))
+
+    @mcp.tool(description=(
         "Change an existing atom's element (symbol, e.g. 'N') and/or formal "
         "charge (pass set_charge=true to apply charge, so 0 can be set "
-        "explicitly). atom_index is 1-based within the structure. "
+        "explicitly). atom_index accepts either a 1-based position within "
+        "the structure (shifts as atoms are added/removed) or a stable ref "
+        "from chemdraw_list_atoms (e.g. 'a42', recommended when editing "
+        "more than one atom in a structure you didn't just create). "
         + TARGET_DOC))
-    def chemdraw_edit_atom(target: str, atom_index: int, element: str = "",
+    def chemdraw_edit_atom(target: str, atom_index: int | str, element: str = "",
                            charge: int = 0, set_charge: bool = False) -> str:
         return as_json(bridge.edit_atom(
             _parse(target), atom_index, element or None,
@@ -153,17 +167,20 @@ def register(mcp, bridge):
 
     @mcp.tool(description=(
         "Change an existing bond's order: single | double | triple | "
-        "aromatic | dative. bond_index is 1-based within the structure. "
-        + TARGET_DOC))
-    def chemdraw_edit_bond(target: str, bond_index: int,
+        "aromatic | dative. bond_index accepts either a 1-based position "
+        "within the structure or a stable ref from chemdraw_list_atoms "
+        "(e.g. 'b12-45'). " + TARGET_DOC))
+    def chemdraw_edit_bond(target: str, bond_index: int | str,
                            bond_order: str = "") -> str:
         return as_json(bridge.edit_bond(_parse(target), bond_index,
                                         bond_order or None))
 
     @mcp.tool(description=(
         "Grow a structure by bonding a new atom to an existing one, then "
-        "auto-cleaning the geometry. " + TARGET_DOC))
-    def chemdraw_add_atom(target: str, attach_to_atom_index: int, element: str,
+        "auto-cleaning the geometry. attach_to_atom_index accepts either a "
+        "1-based position or a stable ref from chemdraw_list_atoms (e.g. "
+        "'a42'). " + TARGET_DOC))
+    def chemdraw_add_atom(target: str, attach_to_atom_index: int | str, element: str,
                           bond_order: str = "single") -> str:
         return as_json(bridge.add_atom(_parse(target), attach_to_atom_index,
                                        element, bond_order))

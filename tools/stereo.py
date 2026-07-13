@@ -18,11 +18,13 @@ def register(mcp, bridge):
 
     @mcp.tool(description=(
         "Set a bond's display: wedge | hash | wavy | bold | dash | plain. "
-        "The drawing is the source of truth for stereochemistry — R/S is "
-        "derived from wedge/hash geometry, so after setting, verify the "
-        "descriptor with chemdraw_get_stereochemistry and flip wedge/hash "
-        "if it came out wrong. " + TARGET_DOC))
-    def chemdraw_set_bond_stereo(target: str, bond_index: int,
+        "bond_index accepts either a 1-based position or a stable ref from "
+        "chemdraw_list_atoms (e.g. 'b12-45'). The drawing is the source of "
+        "truth for stereochemistry — R/S is derived from wedge/hash "
+        "geometry, so after setting, verify the descriptor with "
+        "chemdraw_get_stereochemistry and flip wedge/hash if it came out "
+        "wrong. " + TARGET_DOC))
+    def chemdraw_set_bond_stereo(target: str, bond_index: int | str,
                                  display: str) -> str:
         return as_json(bridge.set_bond_stereo(_parse(target), bond_index,
                                               display))
