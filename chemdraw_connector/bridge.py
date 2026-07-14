@@ -557,6 +557,39 @@ class ChemDrawBridge:
         return self._run(go, timeout=SLOW_TIMEOUT)
 
     @staticmethod
+    def _capture_selection(doc):
+        """Record every currently-selected atom/bond/graphic (by live COM
+        reference), so a temporary selection built for one operation (see
+        transform's atom_refs/bond_refs path) can restore the user's own
+        selection afterward instead of silently clobbering whatever they
+        had highlighted. Doc-scoped .Item() access only, same pattern
+        already proven safe in _build_handle_map — unlike unit-scoped
+        collections', which crash (see targets.unit_atoms_bonds)."""
+        selected = []
+        for i in range(1, doc.Atoms.Count + 1):
+            a = doc.Atoms.Item(i)
+            if a.Selected:
+                selected.append(a)
+        for i in range(1, doc.Bonds.Count + 1):
+            b = doc.Bonds.Item(i)
+            if b.Selected:
+                selected.append(b)
+        for i in range(1, doc.Graphics.Count + 1):
+            g = doc.Graphics.Item(i)
+            if g.Selected:
+                selected.append(g)
+        return selected
+
+    @staticmethod
+    def _restore_selection(doc, selected):
+        doc.Objects.Unselect()
+        for obj in selected:
+            try:
+                obj.Selected = True
+            except Exception:
+                pass  # may have been deleted/changed by the operation just run
+
+    @staticmethod
     def _apply_transform_action(objs, action, dx, dy, degrees, factor, vertical):
         """Shared by transform's whole-unit and sub-selection paths so both
         run the identical dispatch against whatever IChemDrawObjects
@@ -598,6 +631,7 @@ class ChemDrawBridge:
                 backup = self._maybe_snapshot(doc)
                 before = state.build_snapshot(doc)
 
+                prior_selection = self._capture_selection(doc)
                 doc.Objects.Unselect()
                 n_selected = 0
                 for a in atoms:
@@ -608,13 +642,19 @@ class ChemDrawBridge:
                     if targets.bond_ref(b) in wanted_bonds:
                         b.Selected = True
                         n_selected += 1
-                if n_selected == 0:
-                    raise InvalidInputError(
-                        "None of the given atom_refs/bond_refs resolved "
-                        f"within target {target!r}."
-                    )
-                self._apply_transform_action(
-                    doc.Selection.Objects, action, dx, dy, degrees, factor, vertical)
+                try:
+                    if n_selected == 0:
+                        raise InvalidInputError(
+                            "None of the given atom_refs/bond_refs resolved "
+                            f"within target {target!r}."
+                        )
+                    self._apply_transform_action(
+                        doc.Selection.Objects, action, dx, dy, degrees, factor, vertical)
+                finally:
+                    # Guaranteed even on failure — a bad action name or an
+                    # empty match must not leave the user's own selection
+                    # clobbered by our temporary one.
+                    self._restore_selection(doc, prior_selection)
 
                 after = state.build_snapshot(doc)
                 d = diff.diff_snapshots(before, after)

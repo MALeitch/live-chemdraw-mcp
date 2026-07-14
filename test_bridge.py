@@ -24,12 +24,28 @@ def check(label, fn):
         return None
 
 
+def read_modified(bridge):
+    """Read-only observational probe, never assigned to: ChemDraw's COM
+    type library exposes Document.Modified as a get/set bool (same shape
+    as ShowCrosshair/ShowRulers), almost certainly the same flag driving
+    the title-bar '*' and close-time save prompt. It COULD be a cheap
+    'anything changed' signal beating the count-based doc_signature check,
+    but only if resetting it is safe — and doing that without knowing
+    whether it's really the save-prompt flag risks silently suppressing
+    that prompt for the user. This just reads it at a few points so real
+    behavior (does it already start True? does clearing the scratch doc
+    reset it?) can be observed before anything relies on it."""
+    return bridge._run(lambda: bool(bridge._doc().Modified))
+
+
 def main():
     b = ChemDrawBridge()
 
     print("== status / documents ==")
     check("status", b.status)
     check("scratch document (reused, cleared)", b.use_scratch_document)
+    check("Document.Modified right after clearing scratch (observational only)",
+          lambda: read_modified(b))
 
     print("== insert ==")
     benz = check("insert benzene (smiles)", lambda: b.insert_structure("c1ccccc1"))
@@ -57,9 +73,13 @@ def main():
     # mutating the SAME live document stands in for a hand edit or another
     # agent acting between b's tool calls. b's next read must see it —
     # proving the signature check, not a stale flag, gates the cache.
+    check("Document.Modified before simulated hand edit (observational only)",
+          lambda: read_modified(b))
     b2 = ChemDrawBridge()
     check("second bridge inserts a structure (simulated hand edit)",
           lambda: b2.insert_structure("CC(=O)O", "smiles", (500, 500)))
+    check("Document.Modified after simulated hand edit (observational only)",
+          lambda: read_modified(b))
     state_after = check("get_document_state (after simulated hand edit)",
                         b.get_document_state)
     if state_before and state_after:

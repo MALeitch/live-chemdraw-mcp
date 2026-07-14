@@ -8,6 +8,8 @@ addressable too.
 """
 import uuid
 
+import pywintypes
+
 from .errors import NothingSelectedError, TargetNotFoundError
 
 TAG_NAME = "claude_id"
@@ -214,36 +216,97 @@ def _as_legacy_index(ref):
     return None
 
 
-def resolve_atom(doc, unit, ref, cache=None):
-    """ref: a 1-based positional index (legacy — recomputed fresh each
-    call, so it can shift as the structure changes) or an atom_ref()
-    string (stable across calls; get one from chemdraw_list_atoms instead
-    of guessing an index). Returns (atom, atom_index)."""
-    atoms, _ = unit_atoms_bonds(doc, unit, cache)
-    idx = _as_legacy_index(ref)
+def _invalidate_cache(cache):
+    """Force the next iter_units/unit_atoms_bonds call to do a fresh scan.
+
+    Used when touching a cached atom/bond COM reference raises an error
+    even though the cheap doc/unit signature check didn't flag anything —
+    e.g. the user deletes one atom and draws a new one between two of
+    Claude's calls, netting the same atom/bond count, so the count-based
+    signature can't see it happened. See resolve_atom/resolve_bond."""
+    if cache is None:
+        return
+    cache["doc_sig"] = None
+    cache["units"] = None
+    cache["atom_bond"] = {}
+
+
+def _find_atom(atoms, ref, idx):
     if idx is not None:
         if not 1 <= idx <= len(atoms):
             raise ValueError(f"atom_index {idx} out of range 1..{len(atoms)}")
-        return atoms[idx - 1], idx
+        atom = atoms[idx - 1]
+        atom.ID  # touch it now, so a stale reference fails here, not later
+        return atom, idx
     for i, atom in enumerate(atoms, start=1):
         if atom_ref(atom) == ref:
             return atom, i
     raise TargetNotFoundError(ref)
 
 
-def resolve_bond(doc, unit, ref, cache=None):
-    """Same contract as resolve_atom, for bonds/bond_ref(). Returns
-    (bond, bond_index)."""
-    _, bonds = unit_atoms_bonds(doc, unit, cache)
-    idx = _as_legacy_index(ref)
+def _find_bond(bonds, ref, idx):
     if idx is not None:
         if not 1 <= idx <= len(bonds):
             raise ValueError(f"bond_index {idx} out of range 1..{len(bonds)}")
-        return bonds[idx - 1], idx
+        bond = bonds[idx - 1]
+        bond.Atom1.ID  # touch it now, so a stale reference fails here, not later
+        return bond, idx
     for i, bond in enumerate(bonds, start=1):
         if bond_ref(bond) == ref:
             return bond, i
     raise TargetNotFoundError(ref)
+
+
+def resolve_atom(doc, unit, ref, cache=None):
+    """ref: a 1-based positional index (legacy — recomputed fresh each
+    call, so it can shift as the structure changes) or an atom_ref()
+    string (stable across calls; get one from chemdraw_list_atoms instead
+    of guessing an index). Returns (atom, atom_index).
+
+    A cached atom that turns out stale (a COM error when touched — the
+    document changed underneath the cache in a way the cheap signature
+    check couldn't see, see _invalidate_cache) triggers exactly one
+    rebuild-and-retry, mirroring bridge._StaleHandleMap's precedent for
+    the same class of problem elsewhere in this codebase. A second
+    failure raises a clear, specific error instead of a raw COM
+    exception."""
+    idx = _as_legacy_index(ref)
+    atoms, _ = unit_atoms_bonds(doc, unit, cache)
+    try:
+        return _find_atom(atoms, ref, idx)
+    except pywintypes.com_error:
+        if cache is None:
+            raise
+        _invalidate_cache(cache)
+        atoms, _ = unit_atoms_bonds(doc, unit, cache)
+        try:
+            return _find_atom(atoms, ref, idx)
+        except pywintypes.com_error as exc:
+            raise TargetNotFoundError(
+                f"{ref} (the document changed underneath this call and "
+                "could not be resolved even after a fresh scan)"
+            ) from exc
+
+
+def resolve_bond(doc, unit, ref, cache=None):
+    """Same contract as resolve_atom, for bonds/bond_ref(). Returns
+    (bond, bond_index)."""
+    idx = _as_legacy_index(ref)
+    _, bonds = unit_atoms_bonds(doc, unit, cache)
+    try:
+        return _find_bond(bonds, ref, idx)
+    except pywintypes.com_error:
+        if cache is None:
+            raise
+        _invalidate_cache(cache)
+        _, bonds = unit_atoms_bonds(doc, unit, cache)
+        try:
+            return _find_bond(bonds, ref, idx)
+        except pywintypes.com_error as exc:
+            raise TargetNotFoundError(
+                f"{ref} (the document changed underneath this call and "
+                "could not be resolved even after a fresh scan)"
+            ) from exc
 
 
 def resolve(doc, target, cache=None):
