@@ -32,11 +32,7 @@ def get_id(unit):
         return None
 
 
-def ensure_id(unit):
-    oid = get_id(unit)
-    if oid:
-        return oid
-    oid = new_id()
+def _stamp_id(unit, oid):
     tag = unit.MakeObjectTag(TAG_NAME, False)
     tag.StringValue = oid
     try:
@@ -44,6 +40,23 @@ def ensure_id(unit):
         tag.Persistent = True
     except Exception:
         pass
+
+
+def ensure_id(unit):
+    oid = get_id(unit)
+    if oid:
+        return oid
+    oid = new_id()
+    _stamp_id(unit, oid)
+    return oid
+
+
+def retag(unit):
+    """Force a fresh id onto `unit`, overwriting whatever it currently
+    carries. Used by iter_units when a later group's tag collides with an
+    earlier one already claimed this scan (see its docstring)."""
+    oid = new_id()
+    _stamp_id(unit, oid)
     return oid
 
 
@@ -75,6 +88,17 @@ def iter_units(doc, cache=None):
     dedupe by tag id. Untagged fragments (hand-drawn, never observed) have
     no id yet and are always included.
 
+    Probed live on a real figure: copy-pasting a Data-inserted structure
+    duplicates its `claude_id` tag verbatim (tags are Persistent) onto the
+    pasted copy, so two independent top-level Groups end up answering to
+    the same id — over half the "structures" in one document. Every
+    id-keyed lookup (find_by_id, dict-keying by id) then silently resolves
+    to only the first match; the second is invisible except via a
+    document-wide sweep. A group whose tag collides with one already
+    claimed this scan is retagged with a fresh id on the spot — first-seen
+    (document order) keeps its original identity, so any reference a
+    caller already holds for that id stays valid.
+
     cache: optional dict (one per document, owned by the caller — see
     ChemDrawBridge._cache_for) used to skip this full scan when
     doc_signature(doc) still matches what was cached last time. Pass None
@@ -89,10 +113,12 @@ def iter_units(doc, cache=None):
     seen_ids = set()
     for i in range(1, doc.Groups.Count + 1):
         grp = doc.Groups.Item(i)
-        units.append(grp)
         oid = get_id(grp)
+        if oid and oid in seen_ids:
+            oid = retag(grp)
         if oid:
             seen_ids.add(oid)
+        units.append(grp)
     seen_fragment_ids = set()
     for i in range(1, doc.Atoms.Count + 1):
         atom = doc.Atoms.Item(i)

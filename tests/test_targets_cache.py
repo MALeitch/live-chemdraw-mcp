@@ -127,6 +127,54 @@ def test_iter_units_rescans_after_hand_edit_changes_doc_signature():
     assert len(second) == 2
 
 
+def test_iter_units_retags_duplicate_group_tag():
+    # Simulates copy/paste: ChemDraw tags are Persistent, so a pasted copy
+    # of a tagged group carries the SAME claude_id as its source.
+    grp1 = FakeUnit(1, atom_count=2, bond_count=1)
+    targets.ensure_id(grp1)
+    dup = FakeUnit(2, atom_count=2, bond_count=1)
+    dup._tags["claude_id"] = grp1._tags["claude_id"]
+    assert targets.get_id(dup) == targets.get_id(grp1)  # collision, pre-fix
+
+    doc = FakeDoc(groups=[grp1, dup], atoms=[], bonds=[])
+    units = targets.iter_units(doc)
+
+    ids = [targets.get_id(u) for u in units]
+    assert len(ids) == len(set(ids)), "every returned unit must have a distinct id"
+    assert targets.get_id(grp1) == ids[0], "first-seen keeps its original id"
+    assert targets.get_id(dup) != targets.get_id(grp1)
+
+
+def test_iter_units_retag_is_stable_on_rescan():
+    grp1 = FakeUnit(1, atom_count=1, bond_count=0)
+    targets.ensure_id(grp1)
+    dup = FakeUnit(2, atom_count=1, bond_count=0)
+    dup._tags["claude_id"] = grp1._tags["claude_id"]
+    doc = FakeDoc(groups=[grp1, dup], atoms=[], bonds=[])
+
+    targets.iter_units(doc)
+    fixed_dup_id = targets.get_id(dup)
+    targets.iter_units(doc)  # a second, uncached scan must not retag again
+    assert targets.get_id(dup) == fixed_dup_id
+    assert targets.get_id(grp1) != fixed_dup_id
+
+
+def test_iter_units_three_way_collision_all_get_distinct_ids():
+    grp1 = FakeUnit(1, atom_count=1, bond_count=0)
+    targets.ensure_id(grp1)
+    shared = grp1._tags["claude_id"].StringValue
+    dup_a = FakeUnit(2, atom_count=1, bond_count=0)
+    dup_a._tags["claude_id"] = grp1._tags["claude_id"]
+    dup_b = FakeUnit(3, atom_count=1, bond_count=0)
+    dup_b._tags["claude_id"] = type(grp1._tags["claude_id"])()
+    dup_b._tags["claude_id"].StringValue = shared
+    doc = FakeDoc(groups=[grp1, dup_a, dup_b], atoms=[], bonds=[])
+
+    units = targets.iter_units(doc)
+    ids = [targets.get_id(u) for u in units]
+    assert len(ids) == len(set(ids)) == 3
+
+
 def test_iter_units_cache_stays_correct_across_multiple_docs():
     doc_a, grp_a = make_doc_with_one_group(atom_count=2)
     doc_b, grp_b = make_doc_with_one_group(atom_count=3)
