@@ -155,6 +155,86 @@ def main():
             assert len(batch_bonds["applied"]) == 1, batch_bonds
             assert not batch_bonds["failed"], batch_bonds
 
+    print("== sub-selection transform (bond split + flip) ==")
+    fold = check("insert biphenyl for fold/flip test",
+                lambda: b.insert_structure("c1ccc(-c2ccccc2)cc1"))
+    fold_id = fold["inserted"][0]["id"] if fold else None
+    fold_listing = check("list_atoms_bonds biphenyl", lambda: b.list_atoms_bonds(fold_id))
+    split, split_bond_ref = None, None
+    if fold_listing:
+        entry = fold_listing["structures"][0]
+        total_atoms = len(entry["atoms"])
+        ring_bond_rejections = 0
+        # Biphenyl has exactly one non-ring bond (the inter-ring linkage);
+        # every ring bond must raise. Probe each bond rather than assuming
+        # atom/bond ordering, since that's not something this connector
+        # guarantees.
+        for bd in entry["bonds"]:
+            try:
+                candidate = b.split_at_bond(fold_id, bd["ref"], bd["atom1_ref"])
+            except Exception:
+                ring_bond_rejections += 1
+                continue
+            if candidate and 0 < candidate["atom_count"] < total_atoms:
+                split, split_bond_ref = candidate, bd["ref"]
+                break
+        if split:
+            print(f"  ok  found connecting bond {split_bond_ref}: "
+                  f"{split['atom_count']}/{total_atoms} atoms on the split "
+                  f"side ({ring_bond_rejections} ring bonds correctly rejected)")
+        else:
+            print("FAIL  could not find a non-ring connecting bond in biphenyl")
+
+    if split:
+        before_listing = check("list_atoms_bonds before flip",
+                               lambda: b.list_atoms_bonds(fold_id))
+        check("transform: flip the split side", lambda: b.transform(
+            fold_id, "flip", atom_refs=split["atom_refs"], bond_refs=split["bond_refs"]))
+        after_listing = check("list_atoms_bonds after flip",
+                              lambda: b.list_atoms_bonds(fold_id))
+        if before_listing and after_listing:
+            before_xy = {a["ref"]: (a["x"], a["y"])
+                        for a in before_listing["structures"][0]["atoms"]}
+            after_xy = {a["ref"]: (a["x"], a["y"])
+                       for a in after_listing["structures"][0]["atoms"]}
+            moved_ref = split["atom_refs"][0]
+            fixed_ref = next((r for r in before_xy if r not in split["atom_refs"]), None)
+            # Printed, not asserted: we don't yet know what point ChemDraw's
+            # Flip pivots a sub-selection around. Watching real before/after
+            # numbers here is how that becomes a documented fact instead of
+            # a guess (see plan's "Offline planning" section).
+            print(f"  ..  moved atom {moved_ref}: {before_xy.get(moved_ref)} "
+                  f"-> {after_xy.get(moved_ref)}")
+            if fixed_ref:
+                print(f"  ..  unselected atom {fixed_ref}: "
+                      f"{before_xy.get(fixed_ref)} -> {after_xy.get(fixed_ref)} "
+                      f"(expected unchanged)")
+
+        check("transform: clean up after the flip", lambda: b.transform(fold_id, "clean"))
+        recheck = check("list_atoms_bonds after clean", lambda: b.list_atoms_bonds(fold_id))
+        if fold_listing and recheck:
+            assert len(recheck["structures"][0]["atoms"]) == \
+                len(fold_listing["structures"][0]["atoms"]), \
+                "flip+clean must not add/remove atoms"
+
+        print("== sub-selection transform: negative cases ==")
+        ring_bond = next((bd for bd in fold_listing["structures"][0]["bonds"]
+                          if bd["ref"] != split_bond_ref), None)
+        if ring_bond:
+            try:
+                bad = b.split_at_bond(fold_id, ring_bond["ref"], ring_bond["atom1_ref"])
+            except Exception as exc:
+                print(f"  ok  split_at_bond on ring bond correctly raised: {exc}")
+            else:
+                print(f"FAIL  split_at_bond on ring bond should have raised, got {bad}")
+        try:
+            bad_transform = b.transform(fold_id, "flip", atom_refs=["a999999"])
+        except Exception as exc:
+            print(f"  ok  transform with nonexistent atom_ref correctly raised: {exc}")
+        else:
+            print(f"FAIL  transform with nonexistent atom_ref should have raised, "
+                 f"got {bad_transform}")
+
     print("== stereo ==")
     ala = check("insert L-alanine", lambda: b.insert_structure("C[C@@H](N)C(=O)O"))
     ala_id = ala["inserted"][0]["id"] if ala else None

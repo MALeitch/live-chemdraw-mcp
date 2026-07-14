@@ -125,15 +125,29 @@ def register(mcp, bridge):
         return as_json(bridge.copy_to_clipboard(_parse(target)))
 
     @mcp.tool(description=(
-        "Transform structures. action: move (dx/dy points) | rotate (degrees) "
-        "| scale (factor) | flip (vertical=true for vertical) | clean (tidy "
-        "the drawing, ChemDraw's Clean Up Structure). " + TARGET_DOC))
+        "Transform structures, or an arbitrary SUB-SELECTION of one "
+        "structure's atoms/bonds (pass atom_refs_json/bond_refs_json from "
+        "chemdraw_list_atoms or chemdraw_split_at_bond — e.g. to fold/flip "
+        "one branch of a molecule without rescaling the whole thing, which "
+        "would break the shared bond-length convention across a figure). "
+        "action: move (dx/dy points) | rotate (degrees) | scale (factor) | "
+        "flip (vertical=true for vertical) | clean (tidy the drawing, "
+        "ChemDraw's Clean Up Structure). When refs are given, target must "
+        "resolve to exactly one structure. WARNING: flipping/rotating only "
+        "part of a structure can distort bond length/angle at the "
+        "connection point to the untouched part — follow up with "
+        "chemdraw_transform(..., action='clean') on the whole structure "
+        "afterward to fix that. " + TARGET_DOC))
     def chemdraw_transform(target: str = "selection", action: str = "clean",
                            dx: float = 0, dy: float = 0, degrees: float = 0,
-                           factor: float = 1.0, vertical: bool = False) -> str:
+                           factor: float = 1.0, vertical: bool = False,
+                           atom_refs_json: str = "", bond_refs_json: str = "") -> str:
+        atom_refs = json.loads(atom_refs_json) if atom_refs_json else None
+        bond_refs = json.loads(bond_refs_json) if bond_refs_json else None
         return as_json(bridge.transform(_parse(target), action, dx=dx, dy=dy,
                                         degrees=degrees, factor=factor,
-                                        vertical=vertical))
+                                        vertical=vertical, atom_refs=atom_refs,
+                                        bond_refs=bond_refs))
 
     @mcp.tool(description=(
         "Delete structures from the document. " + TARGET_DOC +
@@ -151,6 +165,22 @@ def register(mcp, bridge):
         "1-based index. " + TARGET_DOC))
     def chemdraw_list_atoms(target: str = "selection") -> str:
         return as_json(bridge.list_atoms_bonds(_parse(target)))
+
+    @mcp.tool(description=(
+        "Compute which atoms/bonds lie on one side of a bond, WITHOUT "
+        "changing the document — the offline-planning step for folding or "
+        "flipping one branch of a molecule to fit a bounding box (rescaling "
+        "the whole structure instead is bad practice: every structure in a "
+        "figure should share the same scale/bond length). Pick the bond to "
+        "split at (bond_ref from chemdraw_list_atoms) and one atom_ref "
+        "anywhere on the side you want to affect, then pass the returned "
+        "atom_refs/bond_refs straight into chemdraw_transform — the same "
+        "'compute the whole plan, then execute once' shape as "
+        "chemdraw_get_layout -> chemdraw_move_objects. Raises an error if "
+        "the bond is part of a ring — there is no clean 'one side' of a "
+        "ring bond. " + TARGET_DOC))
+    def chemdraw_split_at_bond(target: str, bond_ref: str, side_atom_ref: str) -> str:
+        return as_json(bridge.split_at_bond(_parse(target), bond_ref, side_atom_ref))
 
     @mcp.tool(description=(
         "Change an existing atom's element (symbol, e.g. 'N') and/or formal "

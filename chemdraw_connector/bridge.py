@@ -16,8 +16,9 @@ from .com import nudge
 from .com import types as t
 from .com.connection import Connection, is_dead_proxy
 from .com.worker import ComWorker, DEFAULT_TIMEOUT
-from .domain import (characterization, cdxml_graph, dedup, diff, enumeration,
-                     label_filter, layout_math, numbering, substructures)
+from .domain import (bond_split, characterization, cdxml_graph, dedup, diff,
+                     enumeration, label_filter, layout_math, numbering,
+                     substructures)
 from .domain.style_presets import PRESETS, get_preset
 from .errors import ChemDrawError, InvalidInputError
 
@@ -520,27 +521,119 @@ class ChemDrawBridge:
 
     # ---------- manipulation ----------
 
-    def transform(self, target="selection", action="clean", dx=0.0, dy=0.0,
-                  degrees=0.0, factor=1.0, vertical=False):
+    def split_at_bond(self, target, bond_ref, side_atom_ref):
+        """Read-only: which atoms/bonds lie on one side of a bond, without
+        touching the document. Feed atom_refs/bond_refs straight into
+        transform to move/flip just that side — the offline-planning step
+        for folding a branch instead of rescaling a whole structure."""
         def go():
             doc = self._doc()
-            units = targets.resolve(doc, target, self._cache_for(doc))
-            for u in units:
-                objs = targets.unit_objects(u)
-                if action == "move":
-                    objs.Move(dx, dy)
-                elif action == "rotate":
-                    objs.Rotate(degrees, True)
-                elif action == "scale":
-                    objs.Scale(factor, True, True)
-                elif action == "flip":
-                    objs.Flip(vertical, False)
-                elif action == "clean":
-                    objs.Clean(False)
-                else:
-                    raise ValueError(
-                        f"Unknown action {action!r}; expected move/rotate/scale/flip/clean"
+            cache = self._cache_for(doc)
+            units = targets.resolve(doc, target, cache)
+            if len(units) != 1:
+                raise InvalidInputError(
+                    f"split_at_bond needs exactly one structure, got "
+                    f"{len(units)} for target {target!r}."
+                )
+            unit = units[0]
+            atoms, bonds = targets.unit_atoms_bonds(doc, unit, cache)
+            bond, _ = targets.resolve_bond(doc, unit, bond_ref, cache)
+            side_atom, _ = targets.resolve_atom(doc, unit, side_atom_ref, cache)
+            try:
+                result = bond_split.split_atoms(
+                    [a.ID for a in atoms],
+                    [(b, b.Atom1.ID, b.Atom2.ID) for b in bonds],
+                    bond.Atom1.ID, bond.Atom2.ID, side_atom.ID)
+            except bond_split.RingBondSplitError as exc:
+                raise InvalidInputError(str(exc)) from exc
+            atoms_by_id = {a.ID: a for a in atoms}
+            return {
+                "id": targets.ensure_id(unit),
+                "atom_refs": [targets.atom_ref(atoms_by_id[aid])
+                             for aid in result["atom_ids"]],
+                "bond_refs": [targets.bond_ref(b) for b in result["bond_ids"]],
+                "atom_count": len(result["atom_ids"]),
+            }
+        return self._run(go, timeout=SLOW_TIMEOUT)
+
+    @staticmethod
+    def _apply_transform_action(objs, action, dx, dy, degrees, factor, vertical):
+        """Shared by transform's whole-unit and sub-selection paths so both
+        run the identical dispatch against whatever IChemDrawObjects
+        collection they're given (a unit's own .Objects, or an ad hoc
+        doc.Selection.Objects built from arbitrary atom/bond refs)."""
+        if action == "move":
+            objs.Move(dx, dy)
+        elif action == "rotate":
+            objs.Rotate(degrees, True)
+        elif action == "scale":
+            objs.Scale(factor, True, True)
+        elif action == "flip":
+            objs.Flip(vertical, False)
+        elif action == "clean":
+            objs.Clean(False)
+        else:
+            raise ValueError(
+                f"Unknown action {action!r}; expected move/rotate/scale/flip/clean"
+            )
+
+    def transform(self, target="selection", action="clean", dx=0.0, dy=0.0,
+                  degrees=0.0, factor=1.0, vertical=False,
+                  atom_refs=None, bond_refs=None):
+        def go():
+            doc = self._doc()
+            cache = self._cache_for(doc)
+
+            if atom_refs or bond_refs:
+                units = targets.resolve(doc, target, cache)
+                if len(units) != 1:
+                    raise InvalidInputError(
+                        f"atom_refs/bond_refs need exactly one target "
+                        f"structure, got {len(units)} for target {target!r}."
                     )
+                unit = units[0]
+                atoms, bonds = targets.unit_atoms_bonds(doc, unit, cache)
+                wanted_atoms = set(atom_refs or [])
+                wanted_bonds = set(bond_refs or [])
+                backup = self._maybe_snapshot(doc)
+                before = state.build_snapshot(doc)
+
+                doc.Objects.Unselect()
+                n_selected = 0
+                for a in atoms:
+                    if targets.atom_ref(a) in wanted_atoms:
+                        a.Selected = True
+                        n_selected += 1
+                for b in bonds:
+                    if targets.bond_ref(b) in wanted_bonds:
+                        b.Selected = True
+                        n_selected += 1
+                if n_selected == 0:
+                    raise InvalidInputError(
+                        "None of the given atom_refs/bond_refs resolved "
+                        f"within target {target!r}."
+                    )
+                self._apply_transform_action(
+                    doc.Selection.Objects, action, dx, dy, degrees, factor, vertical)
+
+                after = state.build_snapshot(doc)
+                d = diff.diff_snapshots(before, after)
+                requested_ids = {targets.ensure_id(unit)}
+                unexpected = [m for m in d["modified"] + d["moved"]
+                             if m["id"] not in requested_ids]
+                return {
+                    "transformed": [targets.ensure_id(unit)],
+                    "action": action,
+                    "atom_refs": sorted(wanted_atoms),
+                    "bond_refs": sorted(wanted_bonds),
+                    "unexpected_changes": unexpected,
+                    "backup_path": backup,
+                }
+
+            units = targets.resolve(doc, target, cache)
+            for u in units:
+                self._apply_transform_action(
+                    targets.unit_objects(u), action, dx, dy, degrees, factor, vertical)
             return {"transformed": [targets.ensure_id(u) for u in units],
                     "action": action}
         return self._run(go, timeout=SLOW_TIMEOUT)
