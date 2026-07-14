@@ -89,6 +89,45 @@ def find_overlaps(boxes, ids=None, tolerance=1.0):
     return hits
 
 
+def distribute_vertical(item_sizes, container, margin=6.0, min_gap=4.0,
+                        align="center"):
+    """One item per row, input order preserved, spread to fill the
+    container's height with equal gaps — the way a column of scheme entries
+    inside a panel box is typically laid out. item_sizes[i] = (w, h);
+    `align` places each item horizontally: left | center | right (relative
+    to the margin-inset container).
+
+    Returns (positions, overflow_pt) like shelf_pack: positions[i] = (x, y)
+    top-left corner, and overflow_pt > 0 when even at min_gap the stack
+    extends past the inner bottom — reported, never silently violated. A
+    single item is centered vertically instead of pinned to the top.
+    """
+    n = len(item_sizes)
+    if n == 0:
+        return [], 0.0
+    inner_h = container.height - 2.0 * margin
+    total_h = sum(h for _, h in item_sizes)
+    if n == 1:
+        gap = 0.0
+        y = container.top + margin + max(0.0, (inner_h - total_h) / 2.0)
+    else:
+        gap = max((inner_h - total_h) / (n - 1), min_gap)
+        y = container.top + margin
+    positions = []
+    for w, h in item_sizes:
+        if align == "left":
+            x = container.left + margin
+        elif align == "right":
+            x = container.right - margin - w
+        else:
+            x = container.left + (container.width - w) / 2.0
+        positions.append((x, y))
+        y += h + gap
+    bottom_of_last = y - gap
+    overflow = max(0.0, bottom_of_last - (container.bottom - margin))
+    return positions, round(overflow, 1)
+
+
 def shelf_pack(item_sizes, container, order=None, h_gap=8.0, v_gap=8.0):
     """First-fit shelf packing: place item_sizes[i] = (w, h) into rows within
     `container` (a Box used as a hard boundary — e.g. an existing panel

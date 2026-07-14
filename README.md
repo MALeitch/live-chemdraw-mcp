@@ -7,10 +7,14 @@ journal columns, detect and contract functional groups to shorthand inside
 larger molecules (chemdraw_contract_group: Ph, TES, Boc, Ts... ~40 groups,
 SMARTS-matched via RDKit), contract/expand whole-structure labels, bulk-expand
 every (or just specific) shorthand label across a whole document in one call
-(chemdraw_expand_labels), plan and execute figure reorganizations (
-chemdraw_get_layout for one full snapshot of structures/captions/panel
-rectangles, chemdraw_move_objects to batch-apply a computed plan with
-automatic collateral-movement detection), read/set
+(chemdraw_expand_labels), interpret and reorganize whole figures (
+chemdraw_describe_canvas for one semantic snapshot — structures classified
+apart from phantom wrapper groups, captions matched to the structures they
+label, panel boxes with members, overlap/overflow violations;
+chemdraw_arrange_in_region to fit structures into a panel box in one call,
+captions riding along, never rescaling; chemdraw_get_layout /
+chemdraw_move_objects for raw-geometry plans with automatic
+collateral-movement detection), read/set
 stereochemistry, generate IUPAC names and HRMS text, check for duplicates and
 valence errors, apply journal style presets, build reaction schemes, and
 enumerate derivative libraries with RDKit-computed properties.
@@ -105,6 +109,23 @@ server.py      FastMCP entry point (stdio)
 - Tool docstrings must be plain string literals: an f-string is not a
   docstring, so FastMCP registers the tool with **no description at all**.
   Pass dynamic text via `@mcp.tool(description=...)`.
+- A structure whose caption is grouped with it enumerates as **two units
+  with the same formula AND the same atom count**: the tight structure
+  group, plus an outer wrapper group holding structure + caption. Probed
+  live: six of six captioned molecules in one panel produced these phantom
+  duplicates, and atom counts cannot filter them (the wrapper contains the
+  same atoms). What betrays a wrapper is geometry — identical formula,
+  bounds fully containing the real structure's, strictly larger (extended
+  over the caption). `domain/canvas.py:find_wrapper_duplicates` implements
+  the check; `chemdraw_describe_canvas` files wrappers under
+  `non_structure_units`. Never target a wrapper for chemistry operations.
+- Panel-title captions get spuriously adopted as structure labels by
+  proximity heuristics. Probed live, both directions: a title sitting just
+  ABOVE a panel's first structure, and the NEXT panel's title sitting just
+  BELOW the previous panel's bottom structure (within normal label gap) —
+  an arrange then dragged that title 34 pt into the wrong panel.
+  `canvas.associate_captions` therefore vetoes captions entirely above a
+  candidate structure and captions in a different panel box.
 - Moving one structure's Group can carry along an object that was NOT
   targeted. Probed live on a real figure: an ion-pair counterion
   (drawn as its own top-level Fragment, its own `claude-*` tag, correctly
@@ -117,15 +138,16 @@ server.py      FastMCP entry point (stdio)
   reporting any object that moved WITHOUT being in the requested batch as
   `unexpected_moves`. Always check that field after a move.
 - For any "reorganize/move these structures" request: call
-  `chemdraw_get_layout` ONCE first (structures + captions + panel
-  rectangles in one round trip), compute the ENTIRE target layout offline
-  in Python (no ChemDraw calls — `domain/layout_math.py`'s `shelf_pack`
-  packs a set of item sizes into an existing box, in a given order,
-  reporting overflow rather than silently violating the box), THEN apply
-  every move in one `chemdraw_move_objects` batch. Probing bounds one
-  object at a time and nudging incrementally (the first attempt at this)
-  is far slower and is how the box-overflow and counterion bugs both
-  happened — plan first, move once, verify once.
+  `chemdraw_describe_canvas` ONCE (classification + relationships +
+  violations in one round trip), then `chemdraw_arrange_in_region` for
+  "fit these into that box" — two calls total, captions carried along.
+  For layouts those two can't express, fall back to `chemdraw_get_layout`
+  + offline math (`domain/layout_math.py`'s `shelf_pack` /
+  `distribute_vertical` place item sizes into an existing box, reporting
+  overflow rather than silently violating it) + ONE `chemdraw_move_objects`
+  batch. Probing bounds one object at a time and nudging incrementally
+  (the first attempt at this) is far slower and is how the box-overflow
+  and counterion bugs both happened — plan first, move once, verify once.
 - `Atom.LabelText` is non-empty for ANY atom ChemDraw draws with a text
   symbol — including ordinary heteroatoms like N, O, NH, not just
   contracted shorthand labels. LabelText alone cannot tell "this is a

@@ -1,6 +1,6 @@
 from chemdraw_connector.domain.layout_math import (
-    Box, caption_anchor, choose_columns, find_overlaps, grid_positions,
-    page_width_points, shelf_pack,
+    Box, caption_anchor, choose_columns, distribute_vertical, find_overlaps,
+    grid_positions, page_width_points, shelf_pack,
 )
 
 
@@ -114,3 +114,44 @@ def test_shelf_pack_single_item_wider_than_container_still_placed():
     positions, overflow = shelf_pack([(500, 20)], Box(0, 0, 100, 100))
     assert positions[0] == (0, 0)
     assert overflow == 0.0
+
+
+def test_distribute_vertical_empty():
+    assert distribute_vertical([], Box(0, 0, 100, 100)) == ([], 0.0)
+
+
+def test_distribute_vertical_equal_gaps_fill_height():
+    # container inner height 100-2*10=80; three items of 20 -> gaps of 10
+    sizes = [(40, 20), (40, 20), (40, 20)]
+    positions, overflow = distribute_vertical(
+        sizes, Box(0, 0, 100, 100), margin=10)
+    assert overflow == 0.0
+    ys = [p[1] for p in positions]
+    assert ys == [10, 40, 70]
+    # last item's bottom lands exactly on the inner bottom
+    assert ys[-1] + 20 == 100 - 10
+
+
+def test_distribute_vertical_alignments():
+    sizes = [(40, 20)] * 2
+    for align, expected_x in (("left", 5), ("center", 30), ("right", 55)):
+        positions, _ = distribute_vertical(
+            sizes, Box(0, 0, 100, 200), margin=5, align=align)
+        assert positions[0][0] == expected_x, align
+
+
+def test_distribute_vertical_overflow_clamps_to_min_gap():
+    # three 50-tall items can't fit 100 inner height: gap clamps to min_gap
+    sizes = [(40, 50)] * 3
+    positions, overflow = distribute_vertical(
+        sizes, Box(0, 0, 100, 100), margin=0, min_gap=4)
+    ys = [p[1] for p in positions]
+    assert ys == [0, 54, 108]
+    assert overflow == 58.0  # bottom of last = 158 vs inner bottom 100
+
+
+def test_distribute_vertical_single_item_centered():
+    positions, overflow = distribute_vertical(
+        [(40, 20)], Box(0, 0, 100, 100), margin=10)
+    assert overflow == 0.0
+    assert positions[0][1] == 40  # (80 inner - 20)/2 + 10 margin

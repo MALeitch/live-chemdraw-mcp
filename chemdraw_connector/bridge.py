@@ -16,8 +16,8 @@ from .com import nudge
 from .com import types as t
 from .com.connection import Connection, is_dead_proxy
 from .com.worker import ComWorker, DEFAULT_TIMEOUT
-from .domain import (bond_split, characterization, cdxml_graph, dedup, diff,
-                     enumeration, label_filter, layout_math, numbering,
+from .domain import (bond_split, canvas, characterization, cdxml_graph, dedup,
+                     diff, enumeration, label_filter, layout_math, numbering,
                      substructures)
 from .domain.style_presets import PRESETS, get_preset
 from .errors import ChemDrawError, InvalidInputError
@@ -1432,6 +1432,205 @@ class ChemDrawBridge:
             }
         return self._run(go, timeout=SLOW_TIMEOUT)
 
+    @staticmethod
+    def _gather_captions(doc):
+        """Every caption on the page as (plain entries, live COM objects) —
+        parallel lists, so callers can reason over the plain data and still
+        reach the COM object to move it. Worker thread only."""
+        entries, objs = [], []
+        for i in range(1, doc.Captions.Count + 1):
+            c = doc.Captions.Item(i)
+            try:
+                grp = c.Group
+                group_id = targets.ensure_id(grp) if grp is not None else None
+            except Exception:
+                group_id = None
+            entries.append({
+                "text": c.Text or "",
+                "bounds": {"left": round(c.Left, 1), "top": round(c.Top, 1),
+                          "right": round(c.Right, 1), "bottom": round(c.Bottom, 1)},
+                "group_id": group_id,
+            })
+            objs.append(c)
+        return entries, objs
+
+    @staticmethod
+    def _graphics_boxes(doc):
+        """Panel rectangles (doc.Graphics) as plain dicts. Worker thread only."""
+        boxes = []
+        for i in range(1, doc.Graphics.Count + 1):
+            g = doc.Graphics.Item(i)
+            boxes.append({
+                "index": i,
+                "bounds": {"left": round(g.Left, 1), "top": round(g.Top, 1),
+                          "right": round(g.Right, 1), "bottom": round(g.Bottom, 1)},
+            })
+        return boxes
+
+    def _correct_caption_positions(self, cap_entries, cap_objs, owner_ids,
+                                   deltas):
+        """After moving structures by `deltas` ({object_id: (dx, dy)}),
+        bring each caption they own along — but only by the residual its
+        structure's move didn't already apply. A caption grouped with its
+        structure is carried automatically by the group's Move (moving it
+        again would double-move it, the exact failure move_objects' own
+        docstring records for counterions); an ungrouped label sitting
+        below its structure is not carried and needs the full delta. The
+        residual, measured against the caption's pre-move bounds, handles
+        both without needing to know which case applies.
+
+        Returns (carried, corrected) counts. Worker thread only."""
+        carried = corrected = 0
+        for entry, cap, oid in zip(cap_entries, cap_objs, owner_ids):
+            d = deltas.get(oid)
+            if d is None:
+                continue
+            try:
+                rdx = d[0] - (cap.Left - entry["bounds"]["left"])
+                rdy = d[1] - (cap.Top - entry["bounds"]["top"])
+                if abs(rdx) < 1.0 and abs(rdy) < 1.0:
+                    carried += 1
+                    continue
+                pos = cap.Position
+                if self._set_position(cap, pos.X + rdx, pos.Y + rdy):
+                    corrected += 1
+            except Exception:
+                continue
+        return carried, corrected
+
+    def describe_canvas(self, region=None):
+        """The one-call semantic read of the page: every unit classified
+        (real structures vs zero-atom caption-wrapper groups), captions
+        matched to the structures they label, panel boxes with their member
+        structures, and violations (overlaps, box overflows) — the full
+        picture a "read/interpret/organize" request needs, computed in one
+        COM pass plus pure Python (domain/canvas.py).
+
+        region: None for the whole page, {"box_index": N} to scope to one
+        panel box, or an explicit {"left","top","right","bottom"} rect.
+        """
+        def go():
+            doc = self._doc()
+            units = state.build_snapshot(doc)
+            cap_entries, _ = self._gather_captions(doc)
+            boxes = self._graphics_boxes(doc)
+            rect = None
+            if region is not None:
+                try:
+                    rect = canvas.resolve_region(region, boxes)
+                except ValueError as exc:
+                    raise InvalidInputError(str(exc)) from exc
+            out = canvas.build_canvas(units, cap_entries, boxes, region=rect)
+            if rect is not None:
+                out["region"] = rect
+            return out
+        return self._run(go, timeout=SLOW_TIMEOUT)
+
+    def arrange_in_region(self, region, object_ids, strategy="vertical_flow",
+                          margin=6.0, align="center", h_gap=8.0, v_gap=8.0):
+        """Fit structures inside a region (panel box or explicit rect) in
+        ONE call: each structure's footprint is unioned with its own
+        captions (found the same way describe_canvas finds them), target
+        positions come from pure math (layout_math.distribute_vertical or
+        shelf_pack for strategy="grid"), every move lands in one batch, and
+        captions ride along. Nothing is ever rescaled — a layout that
+        doesn't fit is REPORTED in `violations`, not forced. Items are
+        placed in object_ids order, so reorder the list to reorder the
+        column/grid."""
+        if strategy not in ("vertical_flow", "grid"):
+            raise InvalidInputError(
+                f"strategy must be 'vertical_flow' or 'grid', got {strategy!r}")
+
+        def go():
+            doc = self._doc()
+            backup = self._maybe_snapshot(doc)
+            cache = self._cache_for(doc)
+            before = state.build_snapshot(doc)
+            before_by_id = {s["id"]: s for s in before}
+            cap_entries, cap_objs = self._gather_captions(doc)
+            boxes = self._graphics_boxes(doc)
+            try:
+                rect = canvas.resolve_region(region, boxes)
+            except ValueError as exc:
+                raise InvalidInputError(str(exc)) from exc
+            real, wrapper_map, others = canvas.classify_units(before)
+            owner_ids = canvas.associate_captions(
+                real, cap_entries, wrapper_map, {u["id"] for u in others},
+                boxes)
+
+            by_id = {targets.ensure_id(u): u
+                     for u in targets.iter_units(doc, cache)}
+            picked, comps, missing = [], [], []
+            for oid in object_ids:
+                unit = by_id.get(oid)
+                snap = before_by_id.get(oid)
+                if unit is None or snap is None or not snap.get("bounds"):
+                    missing.append(oid)
+                    continue
+                comp = dict(snap["bounds"])
+                for entry, owner in zip(cap_entries, owner_ids):
+                    if owner == oid:
+                        comp = canvas.union_bounds(comp, entry["bounds"])
+                picked.append((oid, unit))
+                comps.append(comp)
+            if not picked:
+                raise InvalidInputError(
+                    f"none of object_ids resolved to a structure with bounds "
+                    f"(missing: {missing})")
+
+            container = layout_math.Box(**rect)
+            sizes = [(c["right"] - c["left"], c["bottom"] - c["top"])
+                     for c in comps]
+            if strategy == "grid":
+                inset = layout_math.Box(
+                    container.left + margin, container.top + margin,
+                    container.right - margin, container.bottom - margin)
+                positions, overflow = layout_math.shelf_pack(
+                    sizes, inset, h_gap=h_gap, v_gap=v_gap)
+            else:
+                positions, overflow = layout_math.distribute_vertical(
+                    sizes, container, margin=margin, align=align)
+            # Physically impossible fits only — margin-squeezed items are
+            # already covered honestly by still_overflowing after the move.
+            too_wide = [oid for (w, _), (oid, _u) in zip(sizes, picked)
+                        if w > container.width]
+
+            deltas = {}
+            for (oid, unit), comp, (tx, ty) in zip(picked, comps, positions):
+                dx, dy = tx - comp["left"], ty - comp["top"]
+                targets.unit_objects(unit).Move(dx, dy)
+                deltas[oid] = (dx, dy)
+            carried, corrected = self._correct_caption_positions(
+                cap_entries, cap_objs, owner_ids, deltas)
+
+            after = state.build_snapshot(doc)
+            d = diff.diff_snapshots(before, after)
+            unexpected = [m for m in d["moved"] if m["id"] not in deltas]
+            after_by_id = {s["id"]: s for s in after}
+            resulting = {oid: after_by_id.get(oid, {}).get("bounds")
+                         for oid in deltas}
+            still = [{"id": oid, "edges": canvas.overflow_edges(b, rect)}
+                     for oid, b in resulting.items()
+                     if b and canvas.overflow_edges(b, rect)]
+            return {
+                "arranged": [{"object_id": oid,
+                              "dx": round(dx, 1), "dy": round(dy, 1)}
+                             for oid, (dx, dy) in deltas.items()],
+                "missing": missing,
+                "captions_carried": carried,
+                "captions_corrected": corrected,
+                "violations": {
+                    "overflow_pt": overflow,
+                    "too_wide": too_wide,
+                    "still_overflowing": still,
+                },
+                "resulting_bounds": resulting,
+                "unexpected_moves": unexpected,
+                "backup_path": backup,
+                "preview_png_base64": self._preview_png(doc),
+            }
+        return self._run(go, timeout=max(SLOW_TIMEOUT, 2.0 * len(object_ids)))
+
     def get_layout(self, target="document"):
         """Full layout snapshot for planning a reorganization: every
         structure's id/formula/bounds (scoped to `target`), every caption's
@@ -1447,6 +1646,8 @@ class ChemDrawBridge:
         group ownership discovered ad hoc) to assemble this same picture —
         the fix is gathering it all up front, once, so a plan can be
         computed entirely offline before any ChemDraw call is made.
+        describe_canvas layers classification/relationships on top of this
+        same data; prefer it for interpretation, this for raw geometry.
         """
         def go():
             doc = self._doc()
@@ -1456,41 +1657,24 @@ class ChemDrawBridge:
             else:
                 structures = [state.describe_unit(u, w, h)
                              for u in targets.resolve(doc, target, self._cache_for(doc))]
-
-            captions = []
-            for i in range(1, doc.Captions.Count + 1):
-                c = doc.Captions.Item(i)
-                try:
-                    grp = c.Group
-                    group_id = targets.ensure_id(grp) if grp is not None else None
-                except Exception:
-                    group_id = None
-                captions.append({
-                    "text": c.Text or "",
-                    "bounds": {"left": round(c.Left, 1), "top": round(c.Top, 1),
-                              "right": round(c.Right, 1), "bottom": round(c.Bottom, 1)},
-                    "group_id": group_id,
-                })
-
-            boxes = []
-            for i in range(1, doc.Graphics.Count + 1):
-                g = doc.Graphics.Item(i)
-                boxes.append({
-                    "index": i,
-                    "bounds": {"left": round(g.Left, 1), "top": round(g.Top, 1),
-                              "right": round(g.Right, 1), "bottom": round(g.Bottom, 1)},
-                })
-
+            captions, _ = self._gather_captions(doc)
+            boxes = self._graphics_boxes(doc)
             return {"structures": structures, "captions": captions, "boxes": boxes}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
-    def move_objects(self, moves):
+    def move_objects(self, moves, move_with_captions=True):
         """Apply many independent moves in ONE COM session, instead of one
         MCP tool call per object — the batch-execution half of a
         reorganization plan computed offline against chemdraw_get_layout's
         output.
 
         moves: [{"object_id": ..., "dx": ..., "dy": ...}, ...]
+
+        move_with_captions: each moved structure's own captions (matched
+        the same way describe_canvas matches them) ride along by the same
+        delta, with the residual check in _correct_caption_positions
+        preventing a double move when the group already carried them. Pass
+        False to move structures only, leaving labels where they are.
 
         Probed live: moving one structure's Group can carry along an
         object that was NOT requested — an ion-pair counterion turned out
@@ -1508,28 +1692,49 @@ class ChemDrawBridge:
             doc = self._doc()
             backup = self._maybe_snapshot(doc)
             before = state.build_snapshot(doc)
+            cap_entries = cap_objs = owner_ids = None
+            if move_with_captions:
+                cap_entries, cap_objs = self._gather_captions(doc)
+                real, wrapper_map, others = canvas.classify_units(before)
+                owner_ids = canvas.associate_captions(
+                    real, cap_entries, wrapper_map, {u["id"] for u in others},
+                    self._graphics_boxes(doc))
 
             # Resolve every target ONCE via a single document-wide scan,
             # not once per move (same lesson as contract_functional_groups'
             # earlier find_by_id-per-pass inefficiency).
             by_id = {targets.ensure_id(u): u for u in targets.iter_units(doc, self._cache_for(doc))}
-            applied, missing = [], []
+            applied, missing, deltas = [], [], {}
             for mv in moves:
                 oid = mv["object_id"]
                 unit = by_id.get(oid)
                 if unit is None:
                     missing.append(oid)
                     continue
-                targets.unit_objects(unit).Move(mv.get("dx", 0.0), mv.get("dy", 0.0))
+                dx, dy = mv.get("dx", 0.0), mv.get("dy", 0.0)
+                targets.unit_objects(unit).Move(dx, dy)
                 applied.append(oid)
+                deltas[oid] = (dx, dy)
+
+            carried = corrected = 0
+            if move_with_captions:
+                carried, corrected = self._correct_caption_positions(
+                    cap_entries, cap_objs, owner_ids, deltas)
 
             after = state.build_snapshot(doc)
             d = diff.diff_snapshots(before, after)
             requested_ids = {mv["object_id"] for mv in moves}
             unexpected = [m for m in d["moved"] if m["id"] not in requested_ids]
+            after_by_id = {s["id"]: s for s in after}
             return {
                 "applied": applied,
                 "missing": missing,
+                "captions_carried": carried,
+                "captions_corrected": corrected,
+                "resulting_bounds": {
+                    oid: after_by_id.get(oid, {}).get("bounds")
+                    for oid in applied
+                },
                 "unexpected_moves": unexpected,
                 "diff": d,
                 "backup_path": backup,
