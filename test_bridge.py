@@ -24,6 +24,22 @@ def check(label, fn):
         return None
 
 
+def expect_equal(actual, expected, label):
+    if actual != expected:
+        raise AssertionError(f"{label}: expected {expected}, got {actual}")
+    return actual
+
+
+def _check_status_after_captioning(bridge, baseline):
+    after = bridge.status()
+    expect_equal(after["captions_on_page"] - baseline["captions_on_page"], 12,
+                 "captions_on_page delta")
+    tally = sum(e["structure_count"] for e in after["structures_per_box"])
+    expect_equal(tally, after["structures_on_page"],
+                 "sum(structures_per_box) vs structures_on_page")
+    return after
+
+
 def read_modified(bridge):
     """Read-only observational probe, never assigned to: ChemDraw's COM
     type library exposes Document.Modified as a get/set bool (same shape
@@ -67,6 +83,39 @@ def main():
 
     print("== state / list ==")
     state_before = check("get_document_state", b.get_document_state)
+
+    print("== build_snapshot (CDXML fast path) cross-check vs insert-time describe_unit ==")
+    # insert_structure's "inserted" entries come from state.describe_unit
+    # (the old, still-used, full per-unit COM read). get_document_state's
+    # "structures" come from state.build_snapshot, which now reads
+    # bounds/atom_count/bond_count from one CDXML export instead. Nothing
+    # mutated benz/etoh/asp between insertion and here, so the two paths
+    # must agree exactly for the same live units — this is a same-session,
+    # no-hardcoded-chemistry way to catch a regression in the new path.
+    if state_before:
+        by_id = {s["id"]: s for s in state_before["structures"]}
+        for label, inserted in (("benzene", benz), ("ethanol", etoh), ("aspirin", asp)):
+            if not inserted:
+                continue
+            want = inserted["inserted"][0]
+            got = by_id.get(want["id"])
+
+            def _cross_check(want=want, got=got, label=label):
+                if got is None:
+                    raise AssertionError(f"{label}: id {want['id']} not found in build_snapshot output")
+                for field in ("formula", "atom_count", "bond_count"):
+                    if got[field] != want[field]:
+                        raise AssertionError(
+                            f"{label}.{field}: build_snapshot={got[field]!r} "
+                            f"!= insert-time describe_unit={want[field]!r}")
+                for k in ("left", "top", "right", "bottom"):
+                    if abs(got["bounds"][k] - want["bounds"][k]) > 0.15:
+                        raise AssertionError(
+                            f"{label}.bounds.{k}: build_snapshot={got['bounds'][k]} "
+                            f"!= insert-time={want['bounds'][k]}")
+                return True
+
+            check(f"{label}: build_snapshot matches describe_unit", _cross_check)
 
     print("== cache correctness: hand-edit visibility ==")
     # b caches unit membership (see targets.doc_signature); a second bridge
@@ -286,6 +335,7 @@ def main():
 
     print("== scope table (cleared scratch; watch the grid build) ==")
     check("clear scratch", b.use_scratch_document)
+    baseline_status = check("status baseline (before captioning)", b.status)
     scope = check("build_scope_table 6 entries", lambda: b.build_scope_table([
         {"representation": "c1ccc(cc1)C(=O)O", "label": "1a, 92%"},
         {"representation": "Cc1ccc(cc1)C(=O)O", "label": "1b, 85%"},
@@ -298,6 +348,52 @@ def main():
         assert scope.get("preview_png_base64"), "no preview image"
         assert scope.get("backup_path"), "no backup written"
     check("autonumber", lambda: b.autonumber("document"))
+    # NOTE: _add_caption_to_unit's `cap.Group = unit` turns out to be a
+    # SILENT NO-OP on this ChemDraw version (Professional 26.0.0.6141) —
+    # probed live: the assignment raises nothing, but reading cap.Group
+    # back is always None, so captions built via this connector never
+    # actually merge into their structure's Group here. That means this
+    # scratch scenario does NOT exercise real caption-wrapper duplication
+    # (unlike hand-grouped captions in a real user document, where
+    # find_wrapper_duplicates has been live-verified). structures_on_page
+    # staying at 6 here is therefore not yet proof of wrapper-exclusion —
+    # only that nothing ballooned it. See spawned follow-up task for the
+    # cap.Group regression itself.
+    check("status structures_on_page still 6 after captioning",
+          lambda: expect_equal(b.status()["structures_on_page"], 6,
+                               "structures_on_page"))
+    check("get_document_state structures still 6 after captioning",
+          lambda: expect_equal(len(b.get_document_state()["structures"]), 6,
+                               "len(structures)"))
+    # build_scope_table's own labels ("1a, 92%", ...) plus autonumber's
+    # labels ("1".."6") stack on the same 6 structures -> +12 captions.
+    # boxes_on_page/structures_per_box aren't asserted against an exact
+    # value: the shared scratch document can carry stray doc.Graphics
+    # debris across sessions (use_scratch_document's Objects.Clear() does
+    # not appear to clear doc.Graphics — a separate, pre-existing gap, not
+    # part of this change). Instead we check internal consistency: the
+    # per-box tally must still account for every real structure exactly
+    # once, however many (or few) boxes actually exist right now.
+    after_status = check(
+        "status captions_on_page delta (+12) and structures_per_box "
+        "sums to structures_on_page",
+        lambda: _check_status_after_captioning(b, baseline_status))
+    export = check("export_canvas_table (default path)",
+                    lambda: b.export_canvas_table())
+    if export and after_status:
+        assert export["row_counts"]["structures"] == 6, \
+            f"unexpected structures row_count: {export['row_counts']}"
+        assert export["row_counts"]["captions"] == after_status["captions_on_page"], \
+            f"export/status caption count mismatch: {export['row_counts']}"
+        assert export["row_counts"]["boxes"] == after_status["boxes_on_page"], \
+            f"export/status box count mismatch: {export['row_counts']}"
+        excluded_total = (after_status["excluded_units"]["caption_wrapper_duplicates"]
+                          + after_status["excluded_units"]["decoration_groups"])
+        assert export["row_counts"]["excluded"] == excluded_total, \
+            f"export/status excluded count mismatch: {export['row_counts']}"
+        assert export["total_rows"] == sum(export["row_counts"].values())
+        assert os.path.exists(export["path"]), \
+            f"export_canvas_table path does not exist: {export['path']}"
     check("diff_since_last_check", b.diff_since_last_check)
 
     print("== reaction scheme (cleared scratch) ==")

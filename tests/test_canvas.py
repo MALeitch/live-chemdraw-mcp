@@ -251,3 +251,54 @@ def test_build_canvas_region_scopes_to_panel():
     texts = {c["text"] for c in out["captions"]}
     assert texts == {"2b", "2c"}  # owned captions kept, far caption dropped
     assert {b["index"] for b in out["boxes"]} == {1, 2}  # both intersect
+
+
+# ---------- canvas_to_rows ----------
+
+def test_canvas_to_rows_covers_every_entity_exactly_once():
+    units, captions, boxes = _figure()
+    out = canvas.build_canvas(units, captions, boxes)
+    rows = canvas.canvas_to_rows(out)
+    expected_total = (len(out["structures"]) + len(out["captions"])
+                       + len(out["boxes"]) + len(out["non_structure_units"]))
+    assert len(rows) == expected_total
+    kinds = [r["kind"] for r in rows]
+    assert kinds.count("structure") == len(out["structures"])
+    assert kinds.count("caption") == len(out["captions"])
+    assert kinds.count("box") == len(out["boxes"])
+    assert kinds.count("excluded") == len(out["non_structure_units"])
+
+
+def test_canvas_to_rows_structure_row_joins_captions_into_label():
+    units, captions, boxes = _figure()
+    out = canvas.build_canvas(units, captions, boxes)
+    rows = canvas.canvas_to_rows(out)
+    s1 = next(r for r in rows if r["kind"] == "structure" and r["id"] == "s1")
+    assert s1["label"] == "2b"
+    assert s1["formula"] == "C6H6"
+    assert s1["box_index"] == 2
+
+
+def test_canvas_to_rows_box_row_notes_member_count():
+    units, captions, boxes = _figure()
+    out = canvas.build_canvas(units, captions, boxes)
+    rows = canvas.canvas_to_rows(out)
+    panel = next(r for r in rows if r["kind"] == "box" and r["id"] == 2)
+    assert panel["note"] == "2 structures"
+
+
+def test_canvas_to_rows_excluded_row_carries_the_classification_note():
+    units, captions, boxes = _figure()
+    out = canvas.build_canvas(units, captions, boxes)
+    rows = canvas.canvas_to_rows(out)
+    excluded = next(r for r in rows if r["kind"] == "excluded")
+    assert excluded["id"] == "wrap1"
+    assert "phantom duplicate" in excluded["note"]
+
+
+def test_canvas_to_rows_shares_one_column_set_across_kinds():
+    units, captions, boxes = _figure()
+    out = canvas.build_canvas(units, captions, boxes)
+    rows = canvas.canvas_to_rows(out)
+    keysets = {frozenset(r) for r in rows}
+    assert len(keysets) == 1, "every row kind must share the same columns"

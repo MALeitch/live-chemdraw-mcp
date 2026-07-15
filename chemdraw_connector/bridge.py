@@ -216,7 +216,33 @@ class ChemDrawBridge:
             info["active_document"] = doc.name if doc is not None else None
             info["open_documents"] = app.Documents.Count
             if doc is not None:
-                info["structures_on_page"] = len(targets.iter_units(doc, self._cache_for(doc)))
+                snap = state.build_snapshot(doc, self._cache_for(doc))
+                real, wrapper_map, others = canvas.classify_units(snap)
+                boxes = self._graphics_boxes(doc)
+                info["structures_on_page"] = len(real)
+                info["excluded_units"] = {
+                    "caption_wrapper_duplicates": len(wrapper_map),
+                    "decoration_groups": len(others),
+                }
+                info["captions_on_page"] = doc.Captions.Count
+                info["boxes_on_page"] = len(boxes)
+                per_box = {}
+                unboxed = 0
+                for s in real:
+                    idx = (canvas.containing_box(s["bounds"], boxes)
+                           if s.get("bounds") else None)
+                    if idx is None:
+                        unboxed += 1
+                    else:
+                        per_box[idx] = per_box.get(idx, 0) + 1
+                info["structures_per_box"] = [
+                    {"box_index": b["index"],
+                     "structure_count": per_box.get(b["index"], 0)}
+                    for b in boxes
+                ]
+                if unboxed:
+                    info["structures_per_box"].append(
+                        {"box_index": None, "structure_count": unboxed})
                 info["chemical_warnings"] = doc.NumChemicalWarnings
             return info
         return self._run(go)
@@ -336,19 +362,16 @@ class ChemDrawBridge:
     def get_document_state(self):
         def go():
             doc = self._doc()
-            snap = state.build_snapshot(doc)
-            boxes, ids = [], []
-            for entry in snap:
-                if entry.get("bounds"):
-                    b = entry["bounds"]
-                    boxes.append(layout_math.Box(b["left"], b["top"], b["right"], b["bottom"]))
-                    ids.append(entry["id"])
-            overlaps = layout_math.find_overlaps(boxes, ids)
-            self._last_snapshot = snap
+            snap = state.build_snapshot(doc, self._cache_for(doc))
+            self._last_snapshot = snap  # raw, unfiltered — diff baseline unchanged
+            cap_entries, _ = self._gather_captions(doc)
+            boxes = self._graphics_boxes(doc)
+            out = canvas.build_canvas(snap, cap_entries, boxes)
             return {
                 "document": doc.name,
-                "structures": snap,
-                "overlapping_pairs": overlaps,
+                "structures": out["structures"],
+                "non_structure_units": out["non_structure_units"],
+                "overlapping_pairs": out["violations"]["overlapping_structures"],
                 "chemical_warnings": doc.NumChemicalWarnings,
             }
         return self._run(go, timeout=SLOW_TIMEOUT)
@@ -1526,6 +1549,40 @@ class ChemDrawBridge:
             return out
         return self._run(go, timeout=SLOW_TIMEOUT)
 
+    DEFAULT_CANVAS_EXPORT_NAME = "chemdraw-mcp-canvas-export.csv"
+
+    def export_canvas_table(self, path=None, fmt="csv"):
+        """Write the full classified canvas inventory (every real
+        structure, caption, panel box, and excluded wrapper/decoration
+        unit — everything describe_canvas computes) to one CSV file
+        instead of returning it inline. describe_canvas on a large,
+        unscoped page can exceed the inline tool-result size limit; this
+        has no such ceiling since the caller pages through the file
+        instead. path: defaults to one well-known, overwritten-each-call
+        location (same convention as the scratch document) so exports
+        don't accumulate."""
+        if fmt != "csv":
+            raise InvalidInputError("Only csv is supported")
+
+        def go():
+            doc = self._doc()
+            units = state.build_snapshot(doc, self._cache_for(doc))
+            cap_entries, _ = self._gather_captions(doc)
+            boxes = self._graphics_boxes(doc)
+            built = canvas.build_canvas(units, cap_entries, boxes)
+            rows = canvas.canvas_to_rows(built)
+            out_path = path or os.path.join(
+                os.path.dirname(snapshots.BACKUP_DIR),
+                self.DEFAULT_CANVAS_EXPORT_NAME)
+            abspath = self._write_csv_rows(rows, out_path)
+            counts = {"structures": len(built["structures"]),
+                      "captions": len(built["captions"]),
+                      "boxes": len(built["boxes"]),
+                      "excluded": len(built["non_structure_units"])}
+            return {"path": abspath, "row_counts": counts,
+                    "total_rows": sum(counts.values())}
+        return self._run(go, timeout=SLOW_TIMEOUT)
+
     def arrange_in_region(self, region, object_ids, strategy="vertical_flow",
                           margin=6.0, align="center", h_gap=8.0, v_gap=8.0):
         """Fit structures inside a region (panel box or explicit rect) in
@@ -1866,9 +1923,11 @@ class ChemDrawBridge:
         }
 
     @staticmethod
-    def export_data_table(rows, path, fmt="csv"):
-        if fmt != "csv":
-            raise ValueError("Only csv is supported")
+    def _write_csv_rows(rows, path):
+        """Shared CSV-writing body for export_data_table and
+        export_canvas_table — one on-disk format/convention (Excel-friendly
+        BOM, header row = union of keys across all rows) for every tool
+        that writes tabular results to a file."""
         if not rows:
             raise ValueError("No rows to write")
         fieldnames = list(dict.fromkeys(k for row in rows for k in row))
@@ -1877,4 +1936,11 @@ class ChemDrawBridge:
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-        return {"path": os.path.abspath(path), "rows": len(rows)}
+        return os.path.abspath(path)
+
+    @staticmethod
+    def export_data_table(rows, path, fmt="csv"):
+        if fmt != "csv":
+            raise ValueError("Only csv is supported")
+        abspath = ChemDrawBridge._write_csv_rows(rows, path)
+        return {"path": abspath, "rows": len(rows)}

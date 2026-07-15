@@ -11,8 +11,19 @@ def register(mcp, bridge):
     @mcp.tool()
     def chemdraw_status() -> str:
         """Check the connection to ChemDraw: which instance/version is attached,
-        the active document, and how many structures are on the page. Call this
-        first if anything seems off."""
+        the active document, and how many real structures (molecules) are on
+        the page, plus captions_on_page, boxes_on_page, and a
+        structures_per_box breakdown (structure count per panel box, with a
+        box_index of null for anything outside every box) — enough to see
+        the shape of a scope page without a full describe_canvas/
+        get_document_state call. Caption-wrapper duplicate groups (a
+        structure grouped with its own label caption enumerates as two
+        groups internally) and empty decoration groups (box frames,
+        standalone captions) are excluded from the count and reported
+        separately under excluded_units. For full per-structure detail on a
+        large page, use region-scoped chemdraw_describe_canvas or
+        chemdraw_export_canvas_table rather than dumping the whole page.
+        Call this first if anything seems off."""
         return as_json(bridge.status())
 
     @mcp.tool()

@@ -202,6 +202,57 @@ def associate_captions(structures, captions, wrapper_map=None,
     return out
 
 
+def canvas_to_rows(built):
+    """Flatten build_canvas()'s output into one uniform table — every
+    entity on the page (structures, captions, boxes, and excluded
+    wrapper/decoration units) as one row each, all sharing the same
+    columns so a single CSV captures everything with one 'kind' column to
+    scan down. Built for chemdraw_export_canvas_table: a full-inventory
+    read is too large to return inline on a big document, so it goes to a
+    file the caller pages through instead."""
+    rows = []
+    for s in built["structures"]:
+        b = s.get("bounds") or {}
+        rows.append({
+            "kind": "structure", "id": s["id"],
+            "label": "; ".join(s.get("captions") or []),
+            "formula": s.get("formula", ""),
+            "atom_count": s.get("atom_count", ""),
+            "bond_count": s.get("bond_count", ""),
+            "box_index": s.get("box_index", ""), "note": "",
+            "left": b.get("left", ""), "top": b.get("top", ""),
+            "right": b.get("right", ""), "bottom": b.get("bottom", ""),
+        })
+    for c in built["captions"]:
+        b = c.get("bounds") or {}
+        rows.append({
+            "kind": "caption", "id": c.get("structure_id") or "",
+            "label": c.get("text", ""), "formula": "", "atom_count": "",
+            "bond_count": "", "box_index": c.get("box_index", ""), "note": "",
+            "left": b.get("left", ""), "top": b.get("top", ""),
+            "right": b.get("right", ""), "bottom": b.get("bottom", ""),
+        })
+    for bx in built["boxes"]:
+        bb = bx.get("bounds") or {}
+        rows.append({
+            "kind": "box", "id": bx["index"],
+            "label": "; ".join(bx.get("caption_texts") or []),
+            "formula": "", "atom_count": "", "bond_count": "",
+            "box_index": bx["index"],
+            "note": f"{len(bx.get('structure_ids') or [])} structures",
+            "left": bb.get("left", ""), "top": bb.get("top", ""),
+            "right": bb.get("right", ""), "bottom": bb.get("bottom", ""),
+        })
+    for u in built["non_structure_units"]:
+        rows.append({
+            "kind": "excluded", "id": u["id"], "label": "", "formula": "",
+            "atom_count": "", "bond_count": "", "box_index": "",
+            "note": u.get("note", ""),
+            "left": "", "top": "", "right": "", "bottom": "",
+        })
+    return rows
+
+
 def containing_box(bounds, boxes):
     """Index of the smallest box whose rect contains the bounds' center —
     smallest so that nested rectangles (a page border enclosing panel boxes)
