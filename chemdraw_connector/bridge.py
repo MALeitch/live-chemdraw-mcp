@@ -962,15 +962,22 @@ class ChemDrawBridge:
     # ---------- shorthand ----------
 
     @staticmethod
-    def _reresolve_after_mutation(doc, old_id):
+    def _reresolve_after_mutation(doc, old_id, cache=None):
         """Contract/expand can rebuild a structure, orphaning its tag. If the
         old id still resolves, keep it; otherwise tag the newest untagged unit
-        (the rebuilt structure) and report the id change."""
+        (the rebuilt structure) and report the id change.
+
+        cache: threaded through to iter_units/find_by_id so this scan (run
+        after EVERY unit contraction/expansion, and every round of
+        _contract_round) populates the shared per-document cache instead of
+        discarding its result — a plain uncached call here doesn't just cost
+        a scan itself, it also means the NEXT round's own cached find_by_id
+        gets a cache miss too, paying for the same scan twice."""
         try:
-            targets.find_by_id(doc, old_id)
+            targets.find_by_id(doc, old_id, cache)
             return old_id, None
         except Exception:
-            untagged = [u for u in targets.iter_units(doc)
+            untagged = [u for u in targets.iter_units(doc, cache)
                         if targets.get_id(u) is None]
             if not untagged:
                 return None, f"structure {old_id} could not be re-identified"
@@ -1008,7 +1015,7 @@ class ChemDrawBridge:
             # to the structure's formula, like ChemDraw's own dialog does.
             text = label or objs.Formula or "R"
             objs.ContractObjectsToLabel(text)
-            new_id, note = self._reresolve_after_mutation(doc, uid)
+            new_id, note = self._reresolve_after_mutation(doc, uid, self._cache_for(doc))
             entry = {"id": new_id, "label": text}
             if note:
                 entry["note"] = note
@@ -1032,7 +1039,7 @@ class ChemDrawBridge:
 
         def expand_one(unit, uid):
             targets.unit_objects(unit).ExpandLabelsToStructure()
-            new_id, note = self._reresolve_after_mutation(doc, uid)
+            new_id, note = self._reresolve_after_mutation(doc, uid, self._cache_for(doc))
             entry = {"id": new_id}
             if note:
                 entry["note"] = note
@@ -1257,7 +1264,7 @@ class ChemDrawBridge:
             contracted.append({"label": match["label"],
                                "atoms_collapsed": len(match["atom_ids"])})
 
-        new_id, note = self._reresolve_after_mutation(doc, uid)
+        new_id, note = self._reresolve_after_mutation(doc, uid, self._cache_for(doc))
         return {"any_contracted": True, "contracted": contracted,
                 "new_id": new_id, "note": note}
 
