@@ -29,9 +29,11 @@ def split_atoms(atom_ids, bonds, bond_atom1_id, bond_atom2_id, side_atom_id):
         branch) — BFS from here reaches the whole side regardless. Must
         appear in atom_ids.
 
-    Returns {"atom_ids": frozenset(reachable), "bond_ids": frozenset(...)}
+    Returns {"atom_ids": frozenset(reachable), "bond_ids": [...]}
     — bond_ids are every bond (from `bonds`) with BOTH endpoints in the
     reachable set, i.e. everything that moves rigidly with the selection.
+    A plain list, not a frozenset: bond_token is opaque and callers may
+    pass live COM Bond objects, which aren't hashable.
     The split bond itself is never included: exactly one of its endpoints
     is reachable, never both, once the ring case below is ruled out.
 
@@ -79,7 +81,7 @@ def split_atoms(atom_ids, bonds, bond_atom1_id, bond_atom2_id, side_atom_id):
             "bond removed, so there is no single 'side' to select."
         )
 
-    bond_ids = frozenset(
+    bond_ids = [
         token for token, a, b in bonds if a in visited and b in visited
-    )
+    ]
     return {"atom_ids": frozenset(visited), "bond_ids": bond_ids}
