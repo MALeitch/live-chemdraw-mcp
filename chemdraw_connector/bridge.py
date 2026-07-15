@@ -380,7 +380,7 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             before = self._last_snapshot
-            after = state.build_snapshot(doc)
+            after = state.build_snapshot(doc, self._cache_for(doc))
             self._last_snapshot = after
             if before is None:
                 return {
@@ -652,7 +652,7 @@ class ChemDrawBridge:
                 wanted_atoms = set(atom_refs or [])
                 wanted_bonds = set(bond_refs or [])
                 backup = self._maybe_snapshot(doc)
-                before = state.build_snapshot(doc)
+                before = state.build_snapshot(doc, self._cache_for(doc))
 
                 prior_selection = self._capture_selection(doc)
                 doc.Objects.Unselect()
@@ -679,7 +679,7 @@ class ChemDrawBridge:
                     # clobbered by our temporary one.
                     self._restore_selection(doc, prior_selection)
 
-                after = state.build_snapshot(doc)
+                after = state.build_snapshot(doc, self._cache_for(doc))
                 d = diff.diff_snapshots(before, after)
                 requested_ids = {targets.ensure_id(unit)}
                 unexpected = [m for m in d["modified"] + d["moved"]
@@ -800,7 +800,7 @@ class ChemDrawBridge:
             doc = self._doc()
             cache = self._cache_for(doc)
             backup = self._maybe_snapshot(doc)
-            before = state.build_snapshot(doc)
+            before = state.build_snapshot(doc, self._cache_for(doc))
             applied, failed = [], []
             for e in edits:
                 try:
@@ -811,7 +811,7 @@ class ChemDrawBridge:
                 except Exception as exc:
                     failed.append({"target": e.get("target"),
                                    "atom": e.get("atom"), "error": str(exc)})
-            after = state.build_snapshot(doc)
+            after = state.build_snapshot(doc, self._cache_for(doc))
             d = diff.diff_snapshots(before, after)
             requested_ids = {r["id"] for r in applied}
             unexpected = [m for m in d["modified"] if m["id"] not in requested_ids]
@@ -859,7 +859,7 @@ class ChemDrawBridge:
             doc = self._doc()
             cache = self._cache_for(doc)
             backup = self._maybe_snapshot(doc)
-            before = state.build_snapshot(doc)
+            before = state.build_snapshot(doc, self._cache_for(doc))
             applied, failed = [], []
             for e in edits:
                 try:
@@ -870,7 +870,7 @@ class ChemDrawBridge:
                 except Exception as exc:
                     failed.append({"target": e.get("target"),
                                    "bond": e.get("bond"), "error": str(exc)})
-            after = state.build_snapshot(doc)
+            after = state.build_snapshot(doc, self._cache_for(doc))
             d = diff.diff_snapshots(before, after)
             requested_ids = {r["id"] for r in applied}
             unexpected = [m for m in d["modified"] if m["id"] not in requested_ids]
@@ -1534,7 +1534,7 @@ class ChemDrawBridge:
         """
         def go():
             doc = self._doc()
-            units = state.build_snapshot(doc)
+            units = state.build_snapshot(doc, self._cache_for(doc))
             cap_entries, _ = self._gather_captions(doc)
             boxes = self._graphics_boxes(doc)
             rect = None
@@ -1602,7 +1602,7 @@ class ChemDrawBridge:
             doc = self._doc()
             backup = self._maybe_snapshot(doc)
             cache = self._cache_for(doc)
-            before = state.build_snapshot(doc)
+            before = state.build_snapshot(doc, self._cache_for(doc))
             before_by_id = {s["id"]: s for s in before}
             cap_entries, cap_objs = self._gather_captions(doc)
             boxes = self._graphics_boxes(doc)
@@ -1660,7 +1660,7 @@ class ChemDrawBridge:
             carried, corrected = self._correct_caption_positions(
                 cap_entries, cap_objs, owner_ids, deltas)
 
-            after = state.build_snapshot(doc)
+            after = state.build_snapshot(doc, self._cache_for(doc))
             d = diff.diff_snapshots(before, after)
             unexpected = [m for m in d["moved"] if m["id"] not in deltas]
             after_by_id = {s["id"]: s for s in after}
@@ -1710,7 +1710,7 @@ class ChemDrawBridge:
             doc = self._doc()
             w, h = float(doc.Width or 540.0), float(doc.Height or 720.0)
             if target == "document":
-                structures = state.build_snapshot(doc)
+                structures = state.build_snapshot(doc, self._cache_for(doc))
             else:
                 structures = [state.describe_unit(u, w, h)
                              for u in targets.resolve(doc, target, self._cache_for(doc))]
@@ -1748,7 +1748,7 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             backup = self._maybe_snapshot(doc)
-            before = state.build_snapshot(doc)
+            before = state.build_snapshot(doc, self._cache_for(doc))
             cap_entries = cap_objs = owner_ids = None
             if move_with_captions:
                 cap_entries, cap_objs = self._gather_captions(doc)
@@ -1778,7 +1778,7 @@ class ChemDrawBridge:
                 carried, corrected = self._correct_caption_positions(
                     cap_entries, cap_objs, owner_ids, deltas)
 
-            after = state.build_snapshot(doc)
+            after = state.build_snapshot(doc, self._cache_for(doc))
             d = diff.diff_snapshots(before, after)
             requested_ids = {mv["object_id"] for mv in moves}
             unexpected = [m for m in d["moved"] if m["id"] not in requested_ids]

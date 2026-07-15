@@ -142,10 +142,12 @@ def iter_units(doc, cache=None):
         cache["doc_sig"] = sig
         cache["units"] = units
         # The document changed (or this is the first scan): any cached
-        # per-unit atom/bond lists could now point at stale membership too,
-        # e.g. after a contraction/expansion re-tags a unit. Coarse but
-        # safe — rebuilt lazily, one unit at a time, on next access.
+        # per-unit atom/bond lists (or formula strings) could now point at
+        # stale membership too, e.g. after a contraction/expansion re-tags
+        # a unit. Coarse but safe — rebuilt lazily, one unit at a time, on
+        # next access.
         cache.setdefault("atom_bond", {}).clear()
+        cache.setdefault("formula", {}).clear()
     return units
 
 
@@ -207,6 +209,33 @@ def unit_atoms_bonds(doc, unit, cache=None):
     return atoms, bonds
 
 
+def unit_formula(unit, cache=None):
+    """objs.Formula, cached per (claude_id, unit_signature) the same way
+    unit_atoms_bonds caches atom/bond lists — refetch only when the unit's
+    own content changed, not on every read. Formula can't be derived from a
+    CDXML export (a contracted nickname's true formula lives in ChemDraw's
+    internal nickname database, not in the export — see
+    domain/cdxml_snapshot.py), so this is the one property build_snapshot
+    still reads live per unit, just no longer redundantly on every call."""
+    uid = ensure_id(unit)
+    try:
+        sig = unit_signature(unit)
+    except Exception:
+        sig = None
+    if cache is not None and sig is not None:
+        bucket = cache.setdefault("formula", {})
+        cached = bucket.get(uid)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+    try:
+        formula = unit_objects(unit).Formula or ""
+    except Exception:
+        formula = ""
+    if cache is not None and sig is not None:
+        cache.setdefault("formula", {})[uid] = (sig, formula)
+    return formula
+
+
 def atom_ref(atom):
     """Stable, session-scoped handle for one atom: ChemDraw's own doc-unique
     Atom.ID, already proven and in production use elsewhere (see
@@ -255,6 +284,7 @@ def _invalidate_cache(cache):
     cache["doc_sig"] = None
     cache["units"] = None
     cache["atom_bond"] = {}
+    cache["formula"] = {}
 
 
 def _find_atom(atoms, ref, idx):
