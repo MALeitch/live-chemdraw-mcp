@@ -71,8 +71,12 @@ def grid_positions(boxes, columns=None, page_width=468.0, start_x=36.0,
     return out, columns
 
 
-def caption_anchor(target_left, target_top, box, label_gap=4.0):
-    """Bottom-center anchor point for a caption under a repositioned box."""
+def caption_anchor(target_left, target_top, box, label_gap=12.0):
+    """Bottom-center anchor point for a caption under a repositioned box.
+
+    label_gap default is 12.0, not the visually-implied 4.0: Caption.Position
+    is NOT the caption's top-left corner (confirmed live — a gap of 4.0
+    still left ~5pt of visible overlap with the structure above it)."""
     return (target_left + box.width / 2.0, target_top + box.height + label_gap)
 
 

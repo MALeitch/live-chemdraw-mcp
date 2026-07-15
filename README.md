@@ -137,6 +137,46 @@ server.py      FastMCP entry point (stdio)
   (`domain.diff`, the same logic behind `chemdraw_diff_since_last_check`),
   reporting any object that moved WITHOUT being in the requested batch as
   `unexpected_moves`. Always check that field after a move.
+- `IChemDrawObjects.Rotate(degrees, True)` on a whole unit is safe for
+  chemistry (a rigid in-plane rotation can't create/destroy stereocenters)
+  and always ends up axis-aligned, so its bounding box's width/height are an
+  exact swap after a net 90 degrees of rotation — but don't trust that
+  swap blindly for packing math; re-read `Left/Top/Right/Bottom` live after
+  rotating, same as any other geometry read here. `.Flip(vertical, False)`
+  is NOT chemistry-safe: probed live on a drawn (S)-alanine, a horizontal
+  flip silently inverted its stereocenter to R — ChemDraw mirrors the 2D
+  depiction but does not re-derive wedge/hash bond geometry to compensate,
+  so the wedge stays `wedge-begin` pointing at what is now the wrong
+  configuration. `chemdraw_arrange_in_region`'s `flip_ids` therefore reads
+  each flipped unit's CIP descriptors before/after and reports any change
+  in `violations.stereo_changed` — always check it before trusting a flip
+  on real data; a chiral structure that flips clean is the exception, not
+  the default.
+- `Caption.Position` is NOT the caption's top-left corner. Probed live:
+  positioning a caption at `structure_bottom + 4.0` still left ~5pt of
+  visible overlap with the structure above it — every caption-placing gap
+  in the codebase (`layout_math.caption_anchor`'s `label_gap`, used by
+  `arrange_grid`/`build_scope_table`; `autonumber`'s literal) now defaults
+  to `12.0` instead, which gives real clearance. No existing tool can
+  reposition an EXISTING caption independently either: captions never get a
+  `claude_id`/`object_id` (unlike structures), so `arrange_in_region`/
+  `move_objects` can only ever carry a caption by the same delta its
+  structure moved, which preserves a bad offset rather than fixing it.
+  `fix_caption_gaps` recomputes the offset from scratch (center-x,
+  `bottom + gap`, default `gap=12.0`) using `_gather_captions`/
+  `_set_position` directly. Its default proximity-based caption-to-structure association
+  (`canvas.associate_captions`) is unreliable if a caption was ever left
+  behind while its structure moved elsewhere (e.g. `move_objects` with
+  `move_with_captions=False`) — proximity will confidently attach it to
+  whichever structure is now nearest, which is wrong. Use `fix_caption_gaps`'s
+  `pairs` param (`{structure_id: caption_text}`, captured from
+  `describe_canvas` BEFORE any such move) to bypass association via exact
+  text match instead.
+- `chemdraw_transform(action='clean')` can drastically RESIZE a badly-drawn
+  structure, not just tidy bond angles — probed live, one structure went
+  from 101x84pt to 134x55pt, another grew ~50% taller. Any layout computed
+  before a clean (or contract/expand) call is stale garbage afterward; do
+  not patch around it, re-read bounds fresh and replan.
 - For any "reorganize/move these structures" request: call
   `chemdraw_describe_canvas` ONCE (classification + relationships +
   violations in one round trip), then `chemdraw_arrange_in_region` for

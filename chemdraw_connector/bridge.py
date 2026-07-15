@@ -633,6 +633,16 @@ class ChemDrawBridge:
                 f"Unknown action {action!r}; expected move/rotate/scale/flip/clean"
             )
 
+    @staticmethod
+    def _atom_cip_descriptors(doc, unit, cache):
+        """R/S per atom for one unit, same read as get_stereochemistry's
+        loop body — used to detect a flip silently inverting a stereocenter
+        (confirmed live: ChemDraw's Flip mirrors the depiction but leaves
+        wedge-begin/wedge-end unchanged, which inverts the CIP descriptor)."""
+        unit_atoms, _ = targets.unit_atoms_bonds(doc, unit, cache)
+        return [t.ATOM_CIP_NAMES.get(int(a.Stereochemistry or 0))
+                for a in unit_atoms]
+
     def transform(self, target="selection", action="clean", dx=0.0, dy=0.0,
                   degrees=0.0, factor=1.0, vertical=False,
                   atom_refs=None, bond_refs=None):
@@ -1356,7 +1366,14 @@ class ChemDrawBridge:
 
     # ---------- publication layout ----------
 
-    def _add_caption_to_unit(self, doc, unit, text, x, y, bold=False):
+    def _add_caption_to_unit(self, doc, unit, text, center_x, y, bold=False):
+        """center_x is the desired horizontal CENTER of the caption, not
+        Position.X directly — confirmed live, Caption.Position.X sets the
+        caption's LEFT edge, so placing it at a structure's center-x
+        without correcting for the caption's own width shifts long
+        captions well off-center. Measure the caption's real rendered
+        width right after setting its text (before positioning) and
+        subtract half of it."""
         cap = doc.MakeCaption()
         cap.Text = text
         if bold:
@@ -1364,7 +1381,11 @@ class ChemDrawBridge:
                 cap.Face = 1
             except Exception:
                 pass
-        self._set_position(cap, x, y)
+        try:
+            cap_w = cap.Right - cap.Left
+        except Exception:
+            cap_w = 0.0
+        self._set_position(cap, center_x - cap_w / 2.0, y)
         try:
             cap.Group = unit  # caption joins the structure's group
         except Exception:
@@ -1453,7 +1474,7 @@ class ChemDrawBridge:
             for unit, label in zip(units, labels):
                 cx = (unit.Left + unit.Right) / 2.0
                 self._add_caption_to_unit(
-                    doc, unit, label, cx, unit.Bottom + 4.0, bold=bold)
+                    doc, unit, label, cx, unit.Bottom + 12.0, bold=bold)
             return {
                 "numbered": [
                     {"id": targets.ensure_id(u), "label": lbl}
@@ -1591,7 +1612,8 @@ class ChemDrawBridge:
         return self._run(go, timeout=SLOW_TIMEOUT)
 
     def arrange_in_region(self, region, object_ids, strategy="vertical_flow",
-                          margin=6.0, align="center", h_gap=8.0, v_gap=8.0):
+                          margin=6.0, align="center", h_gap=8.0, v_gap=8.0,
+                          rotate_ids=None, flip_ids=None):
         """Fit structures inside a region (panel box or explicit rect) in
         ONE call: each structure's footprint is unioned with its own
         captions (found the same way describe_canvas finds them), target
@@ -1600,7 +1622,16 @@ class ChemDrawBridge:
         captions ride along. Nothing is ever rescaled — a layout that
         doesn't fit is REPORTED in `violations`, not forced. Items are
         placed in object_ids order, so reorder the list to reorder the
-        column/grid."""
+        column/grid. rotate_ids/flip_ids (subsets of object_ids) are
+        rotated 90deg / mirrored BEFORE packing, so a tall item can be
+        turned to fit a wide-but-short region — the caller decides which
+        ids need it (e.g. from chemdraw_get_layout), this does not guess.
+        WARNING (confirmed live): flipping a chiral structure can silently
+        invert its stereocenter's CIP descriptor — ChemDraw mirrors the
+        depiction but does not re-derive wedge/hash geometry to compensate.
+        Any flip_ids id whose stereochemistry changed is reported in
+        `violations.stereo_changed` — always check it before trusting a
+        flip on real data."""
         if strategy not in ("vertical_flow", "grid"):
             raise InvalidInputError(
                 f"strategy must be 'vertical_flow' or 'grid', got {strategy!r}")
@@ -1624,10 +1655,44 @@ class ChemDrawBridge:
 
             by_id = {targets.ensure_id(u): u
                      for u in targets.iter_units(doc, cache)}
+
+            stereo_changed = []
+            if rotate_ids or flip_ids:
+                for oid in (rotate_ids or []):
+                    unit = by_id.get(oid)
+                    if unit is not None:
+                        self._apply_transform_action(
+                            targets.unit_objects(unit), "rotate",
+                            0.0, 0.0, 90.0, 1.0, False)
+                for oid in (flip_ids or []):
+                    unit = by_id.get(oid)
+                    if unit is None:
+                        continue
+                    stereo_before = self._atom_cip_descriptors(doc, unit, cache)
+                    self._apply_transform_action(
+                        targets.unit_objects(unit), "flip",
+                        0.0, 0.0, 0.0, 1.0, False)
+                    # Flip mirrors the depiction but ChemDraw does not
+                    # re-derive wedge/hash geometry, so a stereocenter's
+                    # CIP descriptor can silently invert (confirmed live:
+                    # S -> R on a flipped alanine) — detect and report it
+                    # rather than trust the mirror is chemistry-neutral.
+                    stereo_after = self._atom_cip_descriptors(doc, unit, cache)
+                    if stereo_before != stereo_after:
+                        stereo_changed.append(oid)
+                # Re-read live bounds rather than assume rotation swapped
+                # w/h — same reasoning as every other geometry read here:
+                # measure the real result instead of trusting a pivot we
+                # haven't pinned down.
+                live = state.build_snapshot(doc, self._cache_for(doc))
+                live_by_id = {s["id"]: s for s in live}
+            else:
+                live_by_id = before_by_id
+
             picked, comps, missing = [], [], []
             for oid in object_ids:
                 unit = by_id.get(oid)
-                snap = before_by_id.get(oid)
+                snap = live_by_id.get(oid)
                 if unit is None or snap is None or not snap.get("bounds"):
                     missing.append(oid)
                     continue
@@ -1687,13 +1752,122 @@ class ChemDrawBridge:
                     "overflow_pt": overflow,
                     "too_wide": too_wide,
                     "still_overflowing": still,
+                    "stereo_changed": stereo_changed,
                 },
                 "resulting_bounds": resulting,
                 "unexpected_moves": unexpected,
+                "rotated": rotate_ids or [],
+                "flipped": flip_ids or [],
                 "backup_path": backup,
                 "preview_png_base64": self._preview_png(doc),
             }
         return self._run(go, timeout=max(SLOW_TIMEOUT, 2.0 * len(object_ids)))
+
+    @staticmethod
+    def _group_caption_rows(owner_bounds):
+        """Cluster {owner_id: bounds} into rows by Y-range overlap (one
+        pass, sorted by top: a structure joins the current row if its top
+        is above that row's accumulated bottom, else starts a new row).
+        Returns {owner_id: row_bottom} — every structure in the same row
+        maps to that row's shared (max) bottom, so their captions can align
+        to one baseline instead of each sitting at its own structure's
+        bottom."""
+        ordered = sorted(owner_bounds.items(), key=lambda kv: kv[1]["top"])
+        rows = []
+        for owner_id, b in ordered:
+            if rows and b["top"] < rows[-1]["bottom"]:
+                rows[-1]["bottom"] = max(rows[-1]["bottom"], b["bottom"])
+                rows[-1]["members"].append(owner_id)
+            else:
+                rows.append({"bottom": b["bottom"], "members": [owner_id]})
+        return {oid: row["bottom"] for row in rows for oid in row["members"]}
+
+    def fix_caption_gaps(self, object_ids=None, gap=12.0, pairs=None,
+                         align_rows=True):
+        """Snap each owned caption to sit truly centered (accounting for
+        the caption's OWN rendered width, not just its structure's center)
+        directly below its structure's CURRENT bounds. Every other layout
+        tool (arrange_in_region, move_objects) only ever carries a caption
+        by the same delta its structure moved, which preserves whatever
+        offset the caption already had — including a bad one. This is the
+        fix for that: it recomputes the offset from scratch instead of
+        preserving it. object_ids=None fixes every real structure's owned
+        caption.
+
+        Default gap is 12.0, not the visually-implied 4.0: `Caption.Position`
+        is NOT the caption's top-left corner (confirmed live — gap=4.0, the
+        value autonumber used to use, still left ~5pt of visible overlap
+        with the structure above it). Also confirmed live: Position.X is
+        the caption's LEFT edge, not its center — setting it to the
+        structure's center-x (without subtracting half the caption's own
+        width) put every caption's left edge at its structure's center,
+        shifting long captions well off-center. Fixed here by reading each
+        caption's own rendered width from `_gather_captions` and
+        subtracting half of it.
+
+        align_rows: when True (default), structures whose Y-ranges overlap
+        are treated as one visual row and ALL their captions align to that
+        row's shared bottom + gap, instead of each caption sitting at its
+        own structure's bottom — otherwise captions in the same row look
+        ragged when row members have different heights (common right after
+        contract_group, since shorthand-collapsed structures vary a lot in
+        size). Set False to anchor every caption to only its own structure.
+
+        pairs: optional {structure_id: caption_text} exact mapping, for
+        when a caption was moved independently of its structure (e.g.
+        move_objects with move_with_captions=False) and now sits too far
+        away for proximity-based association (canvas.associate_captions)
+        to find the right owner — bypasses association, matches by exact
+        caption text instead. Confirmed live this matters: association
+        picked the nearest structure to each caption's STALE position,
+        which was wrong once structures had moved elsewhere."""
+        def go():
+            doc = self._doc()
+            cache = self._cache_for(doc)
+            backup = self._maybe_snapshot(doc)
+            snap = state.build_snapshot(doc, cache)
+            snap_by_id = {s["id"]: s for s in snap}
+            cap_entries, cap_objs = self._gather_captions(doc)
+
+            if pairs:
+                by_text = {}
+                for entry, obj in zip(cap_entries, cap_objs):
+                    by_text.setdefault(entry["text"], (entry, obj))
+                targeted = []
+                for oid, text in pairs.items():
+                    found = by_text.get(text)
+                    if oid in snap_by_id and snap_by_id[oid].get("bounds") and found is not None:
+                        targeted.append((oid, found[0], found[1]))
+            else:
+                boxes = self._graphics_boxes(doc)
+                real, wrapper_map, others = canvas.classify_units(snap)
+                owner_ids = canvas.associate_captions(
+                    real, cap_entries, wrapper_map,
+                    {u["id"] for u in others}, boxes)
+                wanted = set(object_ids) if object_ids else {u["id"] for u in real}
+                targeted = [
+                    (owner, entry, obj)
+                    for entry, obj, owner in zip(cap_entries, cap_objs, owner_ids)
+                    if owner in wanted and owner in snap_by_id
+                    and snap_by_id[owner].get("bounds")
+                ]
+
+            row_bottom = {}
+            if align_rows and targeted:
+                owner_bounds = {oid: snap_by_id[oid]["bounds"]
+                                for oid, _e, _o in targeted}
+                row_bottom = self._group_caption_rows(owner_bounds)
+
+            fixed = []
+            for owner, entry, obj in targeted:
+                b = snap_by_id[owner]["bounds"]
+                cap_w = entry["bounds"]["right"] - entry["bounds"]["left"]
+                cx = (b["left"] + b["right"]) / 2.0 - cap_w / 2.0
+                cy = row_bottom.get(owner, b["bottom"]) + gap
+                self._set_position(obj, cx, cy)
+                fixed.append({"structure_id": owner, "caption": entry["text"]})
+            return {"fixed": fixed, "backup_path": backup}
+        return self._run(go, timeout=SLOW_TIMEOUT)
 
     def get_layout(self, target="document"):
         """Full layout snapshot for planning a reorganization: every
