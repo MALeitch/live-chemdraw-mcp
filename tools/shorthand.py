@@ -29,8 +29,13 @@ Opt-in (matched only when named explicitly): {_OPT_IN}.
 Groups are matched with exactly one attachment bond, biggest first, never
 overlapping, and never a whole molecule. Rings drawn with an aromatic
 circle (rather than alternating double bonds) cannot be matched and are
-skipped. A .cdxml backup of the document is saved first; the result
-includes backup_path. {TARGET_DOC}"""
+skipped. Any structure with at least one contraction is automatically
+cleaned up afterward (Clean Up Structure) — collapsing atoms into a label
+can leave the REMAINING drawn portion with distorted bond angles, confirmed
+live. Its caption is NOT auto-repositioned though, since contraction (like
+any resize) can change where the caption should sit — call
+chemdraw_fix_caption_gaps afterward. A .cdxml backup of the document is
+saved first; the result includes backup_path. {TARGET_DOC}"""
 
 
 def register(mcp, bridge):

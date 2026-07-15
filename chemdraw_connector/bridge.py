@@ -1201,6 +1201,18 @@ class ChemDrawBridge:
                 current_uid, current_unit = step["new_id"], None  # force re-resolve next round
                 if len(contracted) >= self._MAX_CONTRACTIONS_PER_UNIT:
                     break
+            if contracted:
+                # Collapsing atoms into a shorthand label can leave the
+                # REMAINING drawn portion with distorted bond angles
+                # (probed live: a benzyl's ring looked fine before
+                # contraction, ugly after) — whole-unit clean is safe
+                # (same as chemdraw_transform's, no sub-selection risk)
+                # and current_uid doesn't change (verified live: clean
+                # doesn't rebuild/retag a structure the way
+                # ContractObjectsToLabel does).
+                current_uid = self._run(
+                    lambda uid=current_uid: self._clean_unit(uid),
+                    timeout=SLOW_TIMEOUT)
             entry = {"id": current_uid, "contracted": contracted}
             if not contracted and note is None:
                 entry["note"] = (
@@ -1211,6 +1223,14 @@ class ChemDrawBridge:
                 entry["note"] = note
             results.append(entry)
         return {"results": results, "backup_path": backup}
+
+    def _clean_unit(self, uid):
+        """Whole-unit Clean Up Structure by id. Worker thread only."""
+        doc = self._doc()
+        unit = targets.find_by_id(doc, uid, self._cache_for(doc))
+        self._apply_transform_action(
+            targets.unit_objects(unit), "clean", 0.0, 0.0, 0.0, 1.0, False)
+        return targets.ensure_id(unit)
 
     def _contract_round(self, unit, uid, shorthands):
         """Find and contract EVERY non-overlapping match in unit `uid` from
