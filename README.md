@@ -281,3 +281,7 @@ server.py      FastMCP entry point (stdio)
 - Tools report structure ids like `claude-a1b2c3d4`; if one "no longer
   exists," the structure was deleted/rebuilt — ask Claude to call
   `chemdraw_get_document_state` to re-inventory the page.
+
+## License
+
+[MIT](LICENSE)
