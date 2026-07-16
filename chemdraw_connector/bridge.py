@@ -175,12 +175,14 @@ class ChemDrawBridge:
             return False
 
     def _validate_input(self, representation, fmt):
-        """RDKit pre-validation for formats it can parse; canonical output.
-        Formats RDKit can't judge (name, cdxml, helm...) pass through."""
+        """RDKit pre-validation for formats it can parse; Kekulized output
+        (explicit double bonds, no aromatic-circle rendering in ChemDraw —
+        see enumeration.validate_smiles). Formats RDKit can't judge (name,
+        cdxml, helm...) pass through unchanged."""
         if fmt == "smiles":
             return enumeration.validate_smiles(representation)
         if fmt in ("molfile", "molfile-v3000"):
-            enumeration.validate_molblock(representation)
+            return enumeration.validate_molblock(representation)
         return representation
 
     def _insert_structure_units(self, doc, representation, fmt):
@@ -434,8 +436,21 @@ class ChemDrawBridge:
                 if len(units) == 1:
                     objs = targets.unit_objects(units[0])
                 else:
+                    # unit.Selected = True (set directly on the unit, not
+                    # unit_objects(u).Select()) — confirmed live that
+                    # .Select() on a unit's Objects collection REPLACES the
+                    # document's selection rather than adding to it, so a
+                    # loop of .Select() calls silently ended up exporting
+                    # only the LAST unit in a multi-id target. Setting
+                    # .Selected directly on each unit is the proven-
+                    # additive pattern (same as _contract_atom_ids_cached's
+                    # atom/bond selection). Unselect() first so a target
+                    # narrower than "everything currently selected" can't
+                    # pick up something unrelated already selected in the
+                    # live document.
+                    doc.Objects.Unselect()
                     for u in units:
-                        targets.unit_objects(u).Select()
+                        u.Selected = True
                     objs = doc.Selection.Objects
             data = _com_bytes(objs.GetData(mime, dpi))
             if not data:
@@ -459,8 +474,16 @@ class ChemDrawBridge:
         def go():
             doc = self._doc()
             units = targets.resolve(doc, target, self._cache_for(doc))
+            # unit.Selected = True, not unit_objects(u).Select() — see
+            # export_image: .Select() on a unit's Objects collection
+            # REPLACES the document's selection instead of adding to it
+            # (confirmed live), so a loop of .Select() calls used to
+            # silently copy only the LAST unit in a multi-id target.
+            # Unselect() first so an unrelated object already selected in
+            # the live document doesn't get copied along with it.
+            doc.Objects.Unselect()
             for u in units:
-                targets.unit_objects(u).Select()
+                u.Selected = True
             doc.Selection.Objects.Copy()
             return {"copied": [targets.ensure_id(u) for u in units]}
         return self._run(go)
@@ -1201,7 +1224,7 @@ class ChemDrawBridge:
                 current_uid, current_unit = step["new_id"], None  # force re-resolve next round
                 if len(contracted) >= self._MAX_CONTRACTIONS_PER_UNIT:
                     break
-            if contracted:
+            if contracted and current_uid is not None:
                 # Collapsing atoms into a shorthand label can leave the
                 # REMAINING drawn portion with distorted bond angles
                 # (probed live: a benzyl's ring looked fine before
@@ -1210,9 +1233,23 @@ class ChemDrawBridge:
                 # and current_uid doesn't change (verified live: clean
                 # doesn't rebuild/retag a structure the way
                 # ContractObjectsToLabel does).
-                current_uid = self._run(
-                    lambda uid=current_uid: self._clean_unit(uid),
-                    timeout=SLOW_TIMEOUT)
+                #
+                # current_uid is checked for None first: _reresolve_after_
+                # mutation can fail to re-identify a rebuilt structure
+                # (already reported via `note` above), and _clean_unit(None)
+                # would otherwise raise TargetNotFoundError uncaught here,
+                # aborting every remaining unit in this batch instead of
+                # just reporting this one as unclean. A live failure from
+                # _clean_unit itself (structure changed again in between)
+                # is caught the same way, per-unit, not batch-fatal —
+                # matching edit_atoms/edit_bonds' per-item failure handling.
+                try:
+                    current_uid = self._run(
+                        lambda uid=current_uid: self._clean_unit(uid),
+                        timeout=SLOW_TIMEOUT)
+                except Exception as exc:
+                    note = (f"contracted {len(contracted)} group(s) but could "
+                           f"not clean up the result afterward: {exc}")
             entry = {"id": current_uid, "contracted": contracted}
             if not contracted and note is None:
                 entry["note"] = (
@@ -1484,13 +1521,22 @@ class ChemDrawBridge:
         return self._run(go, timeout=max(SLOW_TIMEOUT, 5.0 * len(entries)))
 
     def autonumber(self, target="document", start=1, scheme="numeric",
-                   bold=True):
+                   bold=True, group_sizes=None):
+        """scheme='numeric-letter' requires group_sizes (e.g. [1, 3, 2] ->
+        1, 2a, 2b, 2c, 3a, 3b), sized against `target` resolved in reading
+        order (top-to-bottom, left-to-right — the same order the caller
+        should have seen from chemdraw_get_layout/describe_canvas before
+        deciding which structures share a number). Same "caller decides,
+        this does not guess" shape as arrange_in_region's rotate_ids/
+        flip_ids — there's no way to infer which structures are meant to
+        share a group number from geometry alone."""
         def go():
             doc = self._doc()
             units = targets.resolve(doc, target, self._cache_for(doc))
             # Reading order: top-to-bottom rows, then left-to-right.
             units.sort(key=lambda u: (round(u.Top / 40.0), u.Left))
-            labels = numbering.make_labels(len(units), start=start, scheme=scheme)
+            labels = numbering.make_labels(len(units), start=start, scheme=scheme,
+                                           group_sizes=group_sizes)
             for unit, label in zip(units, labels):
                 cx = (unit.Left + unit.Right) / 2.0
                 self._add_caption_to_unit(

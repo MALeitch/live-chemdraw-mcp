@@ -7,7 +7,9 @@ from rdkit import Chem
 
 
 def test_validate_smiles_ok():
-    assert validate_smiles("c1ccccc1") == "c1ccccc1"
+    # Kekulized on purpose (explicit double bonds) so ChemDraw never draws
+    # an aromatic-circle ring for anything we insert — see validate_smiles.
+    assert validate_smiles("c1ccccc1") == "C1=CC=CC=C1"
 
 
 def test_validate_smiles_bad():

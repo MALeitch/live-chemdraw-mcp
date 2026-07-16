@@ -1,7 +1,5 @@
 """Combinatorial derivative generation (RDKit; canvas only read, never written)."""
-import json
-
-from ._common import as_json
+from ._common import as_json, parse_json_arg, parse_optional_json_arg
 
 
 def register(mcp, bridge):
@@ -23,13 +21,16 @@ def register(mcp, bridge):
         tpsa, hbd, hba, rotatable_bonds, inchikey (default mw+formula).
         Runs without per-molecule ChemDraw round-trips, so 50+ derivatives is
         fast. Pair with chemdraw_export_data_table for a CSV."""
-        props = json.loads(properties_json) if properties_json else ["mw", "formula"]
+        props = parse_optional_json_arg(
+            properties_json, "properties_json", list) or ["mw", "formula"]
         return as_json(bridge.enumerate_derivatives(
-            json.loads(substituents_json), scaffold or None, format, props))
+            parse_json_arg(substituents_json, "substituents_json", list),
+            scaffold or None, format, props))
 
     @mcp.tool()
     def chemdraw_export_data_table(rows_json: str, path: str) -> str:
         """Write tabular results to a CSV file (Excel-friendly). rows_json:
         JSON list of objects, e.g. the derivatives array from
         chemdraw_enumerate_derivatives."""
-        return as_json(bridge.export_data_table(json.loads(rows_json), path))
+        return as_json(bridge.export_data_table(
+            parse_json_arg(rows_json, "rows_json", list), path))

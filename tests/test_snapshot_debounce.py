@@ -50,9 +50,23 @@ def test_maybe_snapshot_takes_fresh_backup_after_signature_changes(tmp_path, mon
     doc = FakeDoc(atoms=2)
     path1 = b._maybe_snapshot(doc)
     doc.Atoms.Count = 3  # simulate a mutation changing the document
-    time.sleep(1.01)  # backup filenames are second-resolution timestamps
     path2 = b._maybe_snapshot(doc)
     assert path2 != path1, "a doc-level change must trigger a fresh backup, not a reused path"
+
+
+def test_write_backup_file_same_second_calls_get_distinct_paths(tmp_path, monkeypatch):
+    """Backup filenames used to be second-resolution only, so two distinct
+    backups taken within the same wall-clock second silently overwrote each
+    other. A uuid suffix now guarantees distinct paths regardless of
+    timing."""
+    monkeypatch.setattr(snapshots, "BACKUP_DIR", str(tmp_path))
+    path1 = snapshots.write_backup_file("doc1", "<CDXML>one</CDXML>", wait=True)
+    path2 = snapshots.write_backup_file("doc1", "<CDXML>two</CDXML>", wait=True)
+    assert path1 != path2
+    with open(path1, encoding="utf-8") as fh:
+        assert fh.read() == "<CDXML>one</CDXML>"
+    with open(path2, encoding="utf-8") as fh:
+        assert fh.read() == "<CDXML>two</CDXML>"
 
 
 def test_maybe_snapshot_write_is_off_thread_but_completes(tmp_path, monkeypatch):

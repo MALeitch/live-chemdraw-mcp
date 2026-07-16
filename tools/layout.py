@@ -1,7 +1,6 @@
 """Publication layout tools."""
-import json
-
-from ._common import TARGET_DOC, as_json, with_preview
+from ._common import (TARGET_DOC, as_json, parse_json_arg,
+                      parse_optional_json_arg, with_preview)
 from .structure import _parse
 
 
@@ -21,7 +20,7 @@ def register(mcp, bridge):
         "geometry — do not reconstruct these relationships yourself with "
         "multiple probing calls."))
     def chemdraw_describe_canvas(region_json: str = "") -> str:
-        region = json.loads(region_json) if region_json.strip() else None
+        region = parse_optional_json_arg(region_json, "region_json", dict)
         return as_json(bridge.describe_canvas(region))
 
     @mcp.tool(description=(
@@ -58,10 +57,11 @@ def register(mcp, bridge):
                                    h_gap: float = 8.0, v_gap: float = 8.0,
                                    rotate_ids_json: str = "",
                                    flip_ids_json: str = ""):
-        rotate_ids = json.loads(rotate_ids_json) if rotate_ids_json.strip() else None
-        flip_ids = json.loads(flip_ids_json) if flip_ids_json.strip() else None
+        rotate_ids = parse_optional_json_arg(rotate_ids_json, "rotate_ids_json", list)
+        flip_ids = parse_optional_json_arg(flip_ids_json, "flip_ids_json", list)
         return with_preview(bridge.arrange_in_region(
-            json.loads(region_json), json.loads(object_ids_json),
+            parse_json_arg(region_json, "region_json", dict),
+            parse_json_arg(object_ids_json, "object_ids_json", list),
             strategy, margin, align, h_gap, v_gap, rotate_ids, flip_ids))
 
     @mcp.tool(description=(
@@ -92,8 +92,8 @@ def register(mcp, bridge):
         "smaller gap can still leave visible overlap (confirmed live)."))
     def chemdraw_fix_caption_gaps(object_ids_json: str = "", gap: float = 12.0,
                                   pairs_json: str = "", align_rows: bool = True):
-        object_ids = json.loads(object_ids_json) if object_ids_json.strip() else None
-        pairs = json.loads(pairs_json) if pairs_json.strip() else None
+        object_ids = parse_optional_json_arg(object_ids_json, "object_ids_json", list)
+        pairs = parse_optional_json_arg(pairs_json, "pairs_json", dict)
         return as_json(bridge.fix_caption_gaps(object_ids, gap, pairs, align_rows))
 
     @mcp.tool(description=(
@@ -129,7 +129,7 @@ def register(mcp, bridge):
         "a follow-up read to verify the layout. A .cdxml backup is saved "
         "first; the result includes backup_path and a preview image."))
     def chemdraw_move_objects(moves_json: str, move_with_captions: bool = True):
-        moves = json.loads(moves_json)
+        moves = parse_json_arg(moves_json, "moves_json", list)
         return with_preview(bridge.move_objects(moves, move_with_captions))
     @mcp.tool()
     def chemdraw_arrange_grid(items_json: str, columns: int = 0,
@@ -145,7 +145,7 @@ def register(mcp, bridge):
         re-invoke with different columns/ordering if anything overlaps, labels
         wrap awkwardly, or the grid is unbalanced. A document backup is saved
         first (backup_path) for rollback."""
-        items = json.loads(items_json)
+        items = parse_json_arg(items_json, "items_json", list)
         return with_preview(bridge.arrange_grid(
             items, columns or None, layout, page_width_in or None))
 
@@ -162,13 +162,24 @@ def register(mcp, bridge):
         The response includes a rendered preview image — LOOK AT IT and
         re-invoke or rearrange if anything is off. A document backup is saved
         first (backup_path)."""
-        entries = json.loads(entries_json)
+        entries = parse_json_arg(entries_json, "entries_json", list)
         return with_preview(bridge.build_scope_table(
             entries, columns or None, layout, page_width_in or None))
 
     @mcp.tool()
     def chemdraw_autonumber(target: str = "document", start: int = 1,
-                            scheme: str = "numeric", bold: bool = True) -> str:
+                            scheme: str = "numeric", bold: bool = True,
+                            group_sizes_json: str = "") -> str:
         """Stamp compound numbers (1, 2, 3...) beneath structures in reading
-        order (top-to-bottom, left-to-right). scheme: numeric | numeric-letter."""
-        return as_json(bridge.autonumber(_parse(target), start, scheme, bold))
+        order (top-to-bottom, left-to-right). scheme: numeric | numeric-letter.
+
+        numeric-letter requires group_sizes_json, a JSON list of how many
+        consecutive structures (in that same reading order) share each
+        number, e.g. [1, 3, 2] for 1, 2a, 2b, 2c, 3a, 3b. There is no way
+        to infer this grouping automatically — call chemdraw_get_layout or
+        chemdraw_describe_canvas first to see the structures in reading
+        order and decide the grouping yourself."""
+        group_sizes = parse_optional_json_arg(
+            group_sizes_json, "group_sizes_json", list)
+        return as_json(bridge.autonumber(
+            _parse(target), start, scheme, bold, group_sizes))

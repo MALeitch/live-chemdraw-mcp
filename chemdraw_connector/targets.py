@@ -163,6 +163,12 @@ def unit_objects(unit):
 
 
 def find_by_id(doc, object_id, cache=None):
+    if not object_id:
+        # get_id(unit) returns None for any never-tagged unit, so without
+        # this guard `object_id=None` would compare equal to the first
+        # untagged unit encountered (None == None) and silently "resolve"
+        # to the wrong structure instead of raising.
+        raise TargetNotFoundError(object_id)
     for unit in iter_units(doc, cache):
         if get_id(unit) == object_id:
             return unit
@@ -374,13 +380,33 @@ def resolve(doc, target, cache=None):
         return [u for u in iter_units(doc, cache)]
     if target == "selection":
         sel = doc.Selection
-        units = []
+        units, seen_ids = [], set()
         if sel is not None:
             try:
                 for i in range(1, sel.Groups.Count + 1):
-                    units.append(sel.Groups.Item(i))
+                    grp = sel.Groups.Item(i)
+                    units.append(grp)
+                    seen_ids.add(ensure_id(grp))
             except Exception:
                 pass
+        # sel.Groups only ever reports Group-type selections. iter_units'
+        # own definition of "unit" also includes a top-level Fragment the
+        # user drew by hand and never wrapped in a Group (see module
+        # docstring; README documents this as a real, observed case) --
+        # sel.Groups has no equivalent for that. Rather than guess at an
+        # unverified Selection.Fragments-style COM property, detect it the
+        # same proven way bridge._capture_selection detects any selection
+        # at all: a selected atom or bond. ensure_id (not get_id) keys the
+        # dedup so a unit already added above, tagged or not, is never
+        # added twice.
+        for unit in iter_units(doc, cache):
+            oid = ensure_id(unit)
+            if oid in seen_ids:
+                continue
+            atoms, bonds = unit_atoms_bonds(doc, unit, cache)
+            if any(a.Selected for a in atoms) or any(b.Selected for b in bonds):
+                units.append(unit)
+                seen_ids.add(oid)
         if not units:
             raise NothingSelectedError()
         return units

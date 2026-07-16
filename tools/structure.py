@@ -1,10 +1,9 @@
 """Document/session, selection, structure I/O, and manipulation tools."""
 import base64
-import json
 
 from mcp.server.fastmcp import Image
 
-from ._common import TARGET_DOC, as_json
+from ._common import TARGET_DOC, as_json, parse_json_arg, parse_optional_json_arg
 
 
 def register(mcp, bridge):
@@ -97,16 +96,19 @@ def register(mcp, bridge):
     def chemdraw_insert_structure(
         representation: str,
         format: str = "smiles",
-        x: float = 0,
-        y: float = 0,
+        x: float | None = None,
+        y: float | None = None,
     ) -> str:
         """Draw a structure into the active ChemDraw document.
 
         format: smiles | molfile | inchi | name (chemical name, e.g. 'aspirin')
         | cdxml | cml | helm. Optional x/y places the structure's center at
-        that point (in points, 72/inch, top-left origin); omit to let ChemDraw
-        choose. Returns the new structure's object_id for later reference."""
-        pos = (x, y) if (x or y) else None
+        that point (in points, 72/inch, top-left origin), including literal
+        (0, 0); omit BOTH to let ChemDraw choose. Returns the new structure's
+        object_id for later reference."""
+        if (x is None) != (y is None):
+            raise ValueError("x and y must be given together, or both omitted")
+        pos = (x, y) if x is not None else None
         return as_json(bridge.insert_structure(representation, format, pos))
 
     @mcp.tool(description=(
@@ -153,8 +155,8 @@ def register(mcp, bridge):
                            dx: float = 0, dy: float = 0, degrees: float = 0,
                            factor: float = 1.0, vertical: bool = False,
                            atom_refs_json: str = "", bond_refs_json: str = "") -> str:
-        atom_refs = json.loads(atom_refs_json) if atom_refs_json else None
-        bond_refs = json.loads(bond_refs_json) if bond_refs_json else None
+        atom_refs = parse_optional_json_arg(atom_refs_json, "atom_refs_json", list)
+        bond_refs = parse_optional_json_arg(bond_refs_json, "bond_refs_json", list)
         return as_json(bridge.transform(_parse(target), action, dx=dx, dy=dy,
                                         degrees=degrees, factor=factor,
                                         vertical=vertical, atom_refs=atom_refs,
@@ -229,7 +231,7 @@ def register(mcp, bridge):
         "being in your list — the same before/after diff "
         "chemdraw_move_objects uses."))
     def chemdraw_edit_atoms(edits_json: str) -> str:
-        return as_json(bridge.edit_atoms(json.loads(edits_json)))
+        return as_json(bridge.edit_atoms(parse_json_arg(edits_json, "edits_json", list)))
 
     @mcp.tool(description=(
         "Apply many bond edits in ONE call instead of one call per bond — "
@@ -242,7 +244,7 @@ def register(mcp, bridge):
         "in your list — the same before/after diff chemdraw_move_objects "
         "uses."))
     def chemdraw_edit_bonds(edits_json: str) -> str:
-        return as_json(bridge.edit_bonds(json.loads(edits_json)))
+        return as_json(bridge.edit_bonds(parse_json_arg(edits_json, "edits_json", list)))
 
     @mcp.tool(description=(
         "Grow a structure by bonding a new atom to an existing one, then "

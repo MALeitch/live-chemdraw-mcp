@@ -4,6 +4,7 @@ import datetime
 import os
 import re
 import threading
+import uuid
 
 BACKUP_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
@@ -34,7 +35,14 @@ def write_backup_file(doc_name, text, wait=True):
     os.makedirs(BACKUP_DIR, exist_ok=True)
     safe = re.sub(r"[^\w.-]+", "_", doc_name or "untitled")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = os.path.join(BACKUP_DIR, f"{safe}-{stamp}.cdxml")
+    # Second-resolution timestamps alone collide: two distinct
+    # backup-triggering mutations within the same wall-clock second would
+    # silently overwrite each other's rollback file. A short uuid4 suffix
+    # (same style as targets.new_id) guarantees uniqueness regardless of
+    # clock resolution, while the timestamp prefix keeps the directory
+    # sorted/readable for a human browsing backups.
+    unique = uuid.uuid4().hex[:6]
+    path = os.path.join(BACKUP_DIR, f"{safe}-{stamp}-{unique}.cdxml")
 
     def do_write():
         with open(path, "w", encoding="utf-8") as fh:

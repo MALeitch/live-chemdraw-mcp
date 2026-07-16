@@ -1,7 +1,5 @@
 """Reaction scheme tools."""
-import json
-
-from ._common import with_preview
+from ._common import parse_json_arg, with_preview
 
 
 def register(mcp, bridge):
@@ -15,5 +13,6 @@ def register(mcp, bridge):
         format, e.g. ["CC(=O)Cl", "c1ccccc1O"]. Includes a preview image —
         look at it and adjust if the layout needs work."""
         return with_preview(bridge.make_reaction_scheme(
-            json.loads(reactants_json), json.loads(products_json),
+            parse_json_arg(reactants_json, "reactants_json", list),
+            parse_json_arg(products_json, "products_json", list),
             reagents_text or None, format))

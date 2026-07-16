@@ -84,9 +84,16 @@ POINTS_PER_INCH = 72.0
 
 def element_symbol(number):
     try:
-        return ELEMENTS[int(number)]
-    except (IndexError, ValueError, TypeError):
+        n = int(number)
+    except (ValueError, TypeError):
         return f"unknown({number})"
+    # Explicit bounds check, not a bare ELEMENTS[n] try/except IndexError:
+    # Python list indexing wraps negative indices instead of raising, so
+    # e.g. -1 would silently return ELEMENTS[-1] ("Og") rather than
+    # degrading to "unknown(-1)" as this function's contract promises.
+    if not 0 <= n < len(ELEMENTS):
+        return f"unknown({number})"
+    return ELEMENTS[n]
 
 
 def element_number(symbol):

@@ -25,18 +25,35 @@ PROPERTY_FUNCS = {
 
 
 def validate_smiles(smiles, what="SMILES"):
-    """Parse + sanitize; returns canonical SMILES or raises ValueError."""
+    """Parse + sanitize; returns a Kekulized canonical SMILES (explicit
+    alternating single/double bonds, no lowercase aromatic atoms) or raises
+    ValueError.
+
+    Kekulized on purpose, not just canonicalized: ChemDraw draws lowercase
+    aromatic SMILES as a delocalized ring circle, which stores every ring
+    bond as order-1 plus a separate decorative circle graphic (confirmed in
+    CDXML export). Any later structural op that reads bond orders — Clean Up
+    Structure above all — sees only single bonds and can silently corrupt
+    fused/heteroatom-rich rings drawn that way (confirmed live: produced
+    radical-valence nitrogens on a polyheteroaromatic scope table). Handing
+    ChemDraw real Kekule bonds up front avoids the circle, and the corruption
+    risk, at the source instead of repairing it after the fact.
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"Invalid {what}: {smiles!r} failed RDKit parsing/sanitization")
-    return Chem.MolToSmiles(mol)
+    Chem.Kekulize(mol, clearAromaticFlags=True)
+    return Chem.MolToSmiles(mol, kekuleSmiles=True)
 
 
 def validate_molblock(molblock):
+    """Parse + sanitize; returns a Kekulized molblock (see validate_smiles
+    for why) or raises ValueError."""
     mol = Chem.MolFromMolBlock(molblock)
     if mol is None:
         raise ValueError("Invalid molfile: failed RDKit parsing/sanitization")
-    return Chem.MolToSmiles(mol)
+    Chem.Kekulize(mol, clearAromaticFlags=True)
+    return Chem.MolToMolBlock(mol, kekulize=True)
 
 
 def _prep_with_map(smiles, map_num, what):

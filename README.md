@@ -106,6 +106,24 @@ server.py      FastMCP entry point (stdio)
   nested fragment to its all-single-bond skeleton, and the circle survives
   as an orphaned floating graphic — kekulize the matched bonds and select
   the circle along with them (bridge._contract_atom_ids does both).
+- Worse than the above: `chemdraw_transform(action='clean')` on a
+  circle-drawn polyheteroaromatic system (confirmed live on a 20-structure
+  scope table built from lowercase-aromatic SMILES) can silently rewrite
+  whole rings to all-single-bond skeletons AND introduce dangling-valence
+  radical nitrogens (`[N]` with no charge/H, invalid chemistry) — worse than
+  just losing the circle, this corrupts the actual bond orders. ~75% of
+  structures in that test were affected; simple monocyclic rings were often
+  fine, fused/heteroatom-dense ones were not. Root-caused to
+  `enumeration.validate_smiles`/`validate_molblock` handing ChemDraw
+  lowercase aromatic text in the first place — **fixed** by Kekulizing
+  (`Chem.Kekulize(..., clearAromaticFlags=True)` +
+  `kekuleSmiles=True`/`kekulize=True`) every SMILES/molfile before it's
+  inserted, so ChemDraw only ever receives explicit double bonds and never
+  draws the circle at all. Structures already on a page from before this
+  fix (or hand-drawn with ChemDraw's own aromatic-ring tool) can still carry
+  circles — clean those with `chemdraw_contract_group`'s kekulize path or by
+  hand, and never trust `action='clean'` on one without re-exporting SMILES
+  afterward to confirm bond orders/valence survived.
 - Tool docstrings must be plain string literals: an f-string is not a
   docstring, so FastMCP registers the tool with **no description at all**.
   Pass dynamic text via `@mcp.tool(description=...)`.
