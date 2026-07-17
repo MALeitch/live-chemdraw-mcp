@@ -1,23 +1,28 @@
 # chemdraw-mcp
 
 MCP server that connects Claude to a **live ChemDraw window** on Windows via
-COM automation. Claude can draw, edit, and organize structures in the document
-you have open — insert by SMILES/name, build substrate-scope figures sized for
-journal columns, detect and contract functional groups to shorthand inside
-larger molecules (chemdraw_contract_group: Ph, TES, Boc, Ts... ~40 groups,
-SMARTS-matched via RDKit), contract/expand whole-structure labels, bulk-expand
-every (or just specific) shorthand label across a whole document in one call
-(chemdraw_expand_labels), interpret and reorganize whole figures (
-chemdraw_describe_canvas for one semantic snapshot — structures classified
-apart from phantom wrapper groups, captions matched to the structures they
-label, panel boxes with members, overlap/overflow violations;
-chemdraw_arrange_in_region to fit structures into a panel box in one call,
-captions riding along, never rescaling; chemdraw_get_layout /
-chemdraw_move_objects for raw-geometry plans with automatic
-collateral-movement detection), read/set
-stereochemistry, generate IUPAC names and HRMS text, check for duplicates and
-valence errors, apply journal style presets, build reaction schemes, and
-enumerate derivative libraries with RDKit-computed properties.
+COM automation — Claude can draw, edit, and organize structures directly in
+the document you have open.
+
+**Capabilities:**
+- **Insert & export** — SMILES, name, molfile, InChI, CDXML; export as an
+  image, structure text, or straight to the clipboard
+- **Substrate-scope tables** — build a whole scope figure in one call, sized
+  for journal columns, with labels/yields placed under each structure
+- **Shorthand groups** — detect and contract functional groups inline
+  (`chemdraw_contract_group`: Ph, TES, Boc, Ts... ~40 groups, SMARTS-matched
+  via RDKit), or contract/expand a whole structure to a single label,
+  including a one-call bulk expand across the whole document
+- **Figure layout** — `chemdraw_describe_canvas` gives one semantic read of a
+  whole page (structures, captions matched to their owners, panel boxes,
+  overlap/overflow violations); `chemdraw_arrange_in_region` fits structures
+  into a panel box in one call, captions riding along, nothing ever
+  rescaled; `chemdraw_get_layout`/`chemdraw_move_objects` for raw-geometry
+  plans with automatic collateral-movement detection
+- **Chemistry QC** — read/set stereochemistry, duplicate detection, valence
+  warnings, IUPAC naming, HRMS text generation
+- **Publication tools** — journal style presets, reaction schemes, and
+  derivative-library enumeration with RDKit-computed properties
 
 Built and validated against **ChemDraw 22 (Revvity)** on Windows 11 /
 Python 3.14.
