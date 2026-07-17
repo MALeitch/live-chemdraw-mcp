@@ -22,6 +22,11 @@ enumerate derivative libraries with RDKit-computed properties.
 Built and validated against **ChemDraw 22 (Revvity)** on Windows 11 /
 Python 3.14.
 
+> This is an independent, unofficial project. It is not affiliated with,
+> endorsed by, or supported by Revvity or PerkinElmer. "ChemDraw" is a
+> trademark of its respective owner; it's referenced here only to describe
+> compatibility. You'll need your own licensed copy of ChemDraw to use this.
+
 ## Setup
 
 ```powershell
