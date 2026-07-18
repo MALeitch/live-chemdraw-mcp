@@ -1,5 +1,7 @@
 # chemdraw-mcp
 
+[![Tests](https://github.com/MALeitch/chemdraw-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/MALeitch/chemdraw-mcp/actions/workflows/tests.yml)
+
 MCP server that connects Claude to a **live ChemDraw window** on Windows via
 COM automation — Claude can draw, edit, and organize structures directly in
 the document you have open.
