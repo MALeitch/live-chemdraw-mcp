@@ -11,7 +11,10 @@ def register(mcp, bridge):
         above it) + products, laid out left to right.
         reactants_json/products_json: JSON lists of structures in the given
         format, e.g. ["CC(=O)Cl", "c1ccccc1O"]. Includes a preview image —
-        look at it and adjust if the layout needs work."""
+        look at it and adjust if the layout needs work. ALWAYS also check
+        `violations.overlapping`: every structure, the arrow, and every
+        caption are checked pairwise after layout, so any collision is
+        reported here rather than only visible in the preview image."""
         return with_preview(bridge.make_reaction_scheme(
             parse_json_arg(reactants_json, "reactants_json", list),
             parse_json_arg(products_json, "products_json", list),

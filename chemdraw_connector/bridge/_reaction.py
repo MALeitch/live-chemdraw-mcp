@@ -1,5 +1,6 @@
 """Reaction scheme layout: reactants + arrow + products."""
 from .. import targets
+from ..domain import layout_math
 from ._plumbing import SLOW_TIMEOUT
 
 _POSITION_TOLERANCE = 0.5  # points; see the verify-and-correct step below
@@ -111,6 +112,8 @@ class _Reaction:
             # and issuing one corrective move if it didn't, rather than
             # trusting a single Move() call always sticks.
             ids = []
+            placed_units = []  # (unit, id), paired directly -- reused below
+            # for the overlap check instead of re-deriving the pairing
             for u, target_left in structure_plan:
                 objs = targets.unit_objects(u)
                 objs.Move(target_left - u.Left, y - (u.Top + u.Bottom) / 2.0)
@@ -118,7 +121,9 @@ class _Reaction:
                 if (abs(u.Left - target_left) > _POSITION_TOLERANCE
                         or abs(actual_center - y) > _POSITION_TOLERANCE):
                     objs.Move(target_left - u.Left, y - actual_center)
-                ids.append(targets.ensure_id(u))
+                uid = targets.ensure_id(u)
+                ids.append(uid)
+                placed_units.append((u, uid))
 
             # Phase 4: arrow, "+"s, and reagents text -- placed last, from
             # the plan built in phase 2, now that every structure's final
@@ -135,8 +140,12 @@ class _Reaction:
                 self._set_position(cap, center_x - w / 2.0, center_y)
                 return cap
 
-            for px in plus_positions:
-                place_centered_caption("+", px, y)
+            decorations = []  # (label, obj) for every non-structure element,
+            # gathered so the overlap check below covers the WHOLE scheme --
+            # a caption or the arrow colliding with something is just as
+            # "not clean" as two structures colliding.
+            for i, px in enumerate(plus_positions):
+                decorations.append((f"+{i}", place_centered_caption("+", px, y)))
 
             arrow_center_x = arrow_left_x + arrow_len / 2.0
             arrow_ok = False
@@ -144,8 +153,10 @@ class _Reaction:
                 arrow = doc.MakeArrow()
                 self._set_position(arrow, arrow_center_x, y)
                 arrow_ok = True
+                decorations.append(("arrow", arrow))
             except Exception:
-                place_centered_caption("→", arrow_center_x, y)
+                decorations.append(
+                    ("arrow", place_centered_caption("→", arrow_center_x, y)))
 
             if reagents_cap is not None:
                 try:
@@ -153,10 +164,32 @@ class _Reaction:
                 except Exception:
                     w = reagents_width
                 self._set_position(reagents_cap, arrow_center_x - w / 2.0, y - 24.0)
+                decorations.append(("reagents_text", reagents_cap))
+
+            # Verify the whole scheme, not just trust the layout math: read
+            # every placed element's FINAL bounds (structures, arrow, every
+            # caption) and flag any pair that actually overlaps, rather than
+            # assuming the math above always produces a clean result. Same
+            # "measure the real result" philosophy as the position
+            # verify-and-correct in phase 3, and reuses the exact overlap
+            # check chemdraw_describe_canvas already relies on
+            # (layout_math.find_overlaps) instead of a bespoke one here.
+            boxes, labels = [], []
+            for u, uid in placed_units:
+                boxes.append(layout_math.Box(u.Left, u.Top, u.Right, u.Bottom))
+                labels.append(uid)
+            for label, obj in decorations:
+                try:
+                    boxes.append(layout_math.Box(obj.Left, obj.Top, obj.Right, obj.Bottom))
+                    labels.append(label)
+                except Exception:
+                    continue
+            overlaps = layout_math.find_overlaps(boxes, ids=labels)
 
             return {
                 "object_ids": ids,
                 "arrow_native": arrow_ok,
+                "violations": {"overlapping": [list(p) for p in overlaps]},
                 "backup_path": backup,
                 "preview_png_base64": self._preview_png(doc),
             }
