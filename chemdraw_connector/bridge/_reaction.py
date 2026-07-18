@@ -47,6 +47,14 @@ class _Reaction:
         conditions are -- borrowed directly from CleanRXN+'s (a separate,
         working ChemDraw add-in for reaction-scheme layout) auto-width
         rule: arrow space = max(default, reagent text width + padding).
+
+        One more confirmed live: the arrow itself didn't grow with that
+        reserved space either -- Arrow.Position is ALSO not a center (it
+        aliases Arrow.End, one of its two endpoints), and MakeArrow()'s
+        default Start/End are only ~29pt apart regardless of the layout
+        computed above, so a long reagents string ended up centered over a
+        gap the drawn arrow barely spanned. Fixed by setting Start/End
+        explicitly to the full reserved width instead of just Position.
         """
         reactants = [self._validate_input(r, fmt) for r in reactants]
         products = [self._validate_input(p, fmt) for p in products]
@@ -151,7 +159,25 @@ class _Reaction:
             arrow_ok = False
             try:
                 arrow = doc.MakeArrow()
-                self._set_position(arrow, arrow_center_x, y)
+                # Confirmed live: Position (like Caption.Position) is NOT
+                # the arrow's center -- it's one of its two endpoints
+                # (Position == End), and MakeArrow()'s default Start/End
+                # are only ~29pt apart regardless of the reserved space
+                # computed above. Setting Position alone left a short,
+                # fixed-length arrow sitting off-center under a much wider
+                # reagents caption instead of spanning the full gap. Set
+                # both endpoints explicitly instead: default Start.X >
+                # End.X (Start is the head/right side, End the tail/left
+                # side, confirmed live), so End gets the left edge and
+                # Start the right edge to preserve the arrowhead pointing
+                # right, toward the products, exactly as MakeArrow() draws
+                # it by default.
+                end_pt = arrow.End
+                end_pt.X, end_pt.Y = arrow_left_x, y
+                arrow.End = end_pt
+                start_pt = arrow.Start
+                start_pt.X, start_pt.Y = arrow_left_x + arrow_len, y
+                arrow.Start = start_pt
                 arrow_ok = True
                 decorations.append(("arrow", arrow))
             except Exception:
