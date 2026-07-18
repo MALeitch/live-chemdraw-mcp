@@ -1,6 +1,7 @@
 """Reaction scheme layout: reactants + arrow + products."""
 from .. import targets
 from ..domain import layout_math
+from ..domain.reagent_text import subscript_formula_numbers
 from ._plumbing import SLOW_TIMEOUT
 
 _POSITION_TOLERANCE = 0.5  # points; see the verify-and-correct step below
@@ -82,7 +83,16 @@ class _Reaction:
             reagents_width = 0.0
             if reagents_text:
                 reagents_cap = doc.MakeCaption()
-                reagents_cap.Text = reagents_text
+                # Formula subscripts (the "3" in PPh3, "2"/"3" in K2CO3)
+                # via Unicode subscript digits, not ChemDraw's own
+                # rich-text runs -- Caption.Styles has no way to add a new
+                # formatted run through COM (confirmed live, no Add
+                # method), but ChemDraw renders Unicode subscript
+                # characters correctly, so this sidesteps that limitation
+                # entirely. See domain/reagent_text.py for what does and
+                # doesn't get subscripted (temperatures/equivalents/step
+                # numbers are deliberately left alone).
+                reagents_cap.Text = subscript_formula_numbers(reagents_text)
                 try:
                     reagents_width = reagents_cap.Right - reagents_cap.Left
                 except Exception:
