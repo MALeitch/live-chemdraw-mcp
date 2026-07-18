@@ -30,4 +30,12 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: pytest tests/ -q
+        # python -m pytest (not bare `pytest`): -m inserts the CWD (repo
+        # root) onto sys.path, which is what makes `tools/` importable --
+        # `pip install -e .` only wires up chemdraw_connector as a
+        # package, and tests/ has no __init__.py so pytest's own rootdir
+        # insertion doesn't reach the repo root on its own. Confirmed this
+        # matters: bare `pytest tests/ -q` fails CI with
+        # "ModuleNotFoundError: No module named 'tools'" even though the
+        # identical command passes locally via `python -m pytest`.
+        run: python -m pytest tests/ -q
