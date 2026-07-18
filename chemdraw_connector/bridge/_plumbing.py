@@ -1,0 +1,191 @@
+"""Foundational plumbing shared by every other bridge mixin: the COM worker
+submission wrapper, document resolution, per-document caching, backup
+debouncing, and RDKit pre-validation. Every other mixin's methods call
+straight into `self._run`/`self._doc`/`self._cache_for`/`self._maybe_snapshot`
+via the composed ChemDrawBridge instance."""
+import pythoncom
+import pywintypes
+
+from .. import snapshots, state, targets
+from ..com import nudge
+from ..com import types as t
+from ..com.connection import Connection, is_dead_proxy
+from ..com.worker import ComWorker, DEFAULT_TIMEOUT
+from ..domain import enumeration
+from ..errors import ChemDrawError, InvalidInputError
+
+SLOW_TIMEOUT = 45.0  # name<->structure conversions and batch ops can be slow
+# expand_labels intentionally makes ONE COM call covering every matching
+# label at once (verified safe — unlike contraction, ExpandLabelsToStructure
+# doesn't merge separate structures, see bridge docstring on expand_labels).
+# A single call doing genuinely more total ChemDraw-side work needs more
+# runway than SLOW_TIMEOUT before the wedge detector should worry.
+BULK_TIMEOUT = 180.0
+
+
+def _com_text(data):
+    if isinstance(data, memoryview):
+        return data.tobytes().decode("utf-8", "replace")
+    return "" if data is None else str(data)
+
+
+def _com_bytes(data):
+    if isinstance(data, memoryview):
+        return data.tobytes()
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    return _com_text(data).encode("utf-8")
+
+
+class _Plumbing:
+    def __init__(self):
+        self._conn = Connection()
+        self._worker = ComWorker(unblock_hook=self._nudge_chemdraw)
+        self._last_snapshot = None  # for diff_since_last_check
+        self._doc_name = None  # tracked working document (see _doc)
+        self._caches = {}  # doc.name -> targets.py unit/atom/bond cache
+        self._last_backup = {}  # doc.name -> {"sig": ..., "path": ...}
+
+    def _cache_for(self, doc):
+        """Per-document cache passed to targets.iter_units/resolve/
+        find_by_id/unit_atoms_bonds so repeated calls skip full-document
+        COM rescans when nothing has changed (see targets.doc_signature).
+        Keyed by doc.name, the same document-identity key _doc() itself
+        tracks, so switching the active document can never serve one
+        document's cached units for another."""
+        return self._caches.setdefault(doc.name, {})
+
+    def _maybe_snapshot(self, doc):
+        """Backup-on-mutation, debounced: reuse the last backup's path when
+        doc_signature(doc) hasn't changed since it was taken (same
+        signature check as the unit/atom/bond cache), instead of
+        re-exporting + rewriting a fresh CDXML file on every mutating call
+        in a rapid chain. When a fresh backup IS needed, the COM export
+        happens here (must run on the worker thread) but the disk write is
+        handed off (see snapshots.write_backup_file(wait=False)) so a slow
+        disk never blocks the worker thread. Worker thread only."""
+        sig = targets.doc_signature(doc)
+        last = self._last_backup.get(doc.name)
+        if last is not None and last["sig"] == sig:
+            return last["path"]
+        text = snapshots.export_cdxml_text(doc)
+        if text is None:
+            return None
+        path = snapshots.write_backup_file(doc.name, text, wait=False)
+        self._last_backup[doc.name] = {"sig": sig, "path": path}
+        return path
+
+    def _nudge_chemdraw(self):
+        """Break ChemDraw out of an interactive block (in-canvas text edit).
+        Runs off the COM worker thread via pure Win32 — see com/nudge.py."""
+        return bool(nudge.nudge_escape(self._conn.hwnd))
+
+    def _run(self, fn, timeout=DEFAULT_TIMEOUT):
+        def wrapped():
+            try:
+                return fn()
+            except pywintypes.com_error as exc:
+                if is_dead_proxy(exc):
+                    # ChemDraw died mid-call. Reconnect for future calls, but
+                    # report honestly — a silent retry against a fresh instance
+                    # would masquerade as "object not found."
+                    try:
+                        self._conn.app()
+                    except Exception:
+                        pass
+                    raise ChemDrawError(
+                        "ChemDraw stopped responding during this operation (it "
+                        "may have crashed) and a fresh instance was reconnected. "
+                        "Check the ChemDraw window — unsaved work from before "
+                        "the crash may be recoverable from the automatic "
+                        f"backups in {snapshots.BACKUP_DIR}"
+                    ) from exc
+                raise ChemDrawError(self._explain(exc)) from exc
+        return self._worker.submit(wrapped, timeout=timeout)
+
+    @staticmethod
+    def _explain(exc):
+        parts = [str(p) for p in (exc.excepinfo or []) if isinstance(p, str) and p]
+        detail = "; ".join(parts) or exc.strerror or str(exc)
+        return f"ChemDraw rejected the operation: {detail}"
+
+    def _doc(self):
+        """The working document. Worker thread only.
+
+        Quirk (probed live): ActiveDocument intermittently returns None over
+        COM — even mid-session for documents that were being used moments
+        before. So: trust ActiveDocument when it answers (it tracks the user's
+        real focus), but remember the working document's name and fall back to
+        re-resolving that name when ActiveDocument goes blank, instead of
+        grabbing an arbitrary document or spawning new ones.
+        """
+        app = self._conn.app()
+        doc = app.ActiveDocument
+        if doc is not None:
+            self._doc_name = doc.name
+            return doc
+        if self._doc_name:
+            for i in range(1, app.Documents.Count + 1):
+                cand = app.Documents.Item(i)
+                if cand.name == self._doc_name:
+                    return cand
+            self._doc_name = None  # tracked document was closed
+        if app.Documents.Count > 0:
+            doc = app.Documents.Item(app.Documents.Count)
+        else:
+            doc = app.Documents.Add()
+        doc.Activate()
+        self._doc_name = doc.name
+        return doc
+
+    @staticmethod
+    def _insert_raw(objs, mime, payload):
+        raw = objs._oleobj_
+        dispid = raw.GetIDsOfNames(0, "Data")
+        raw.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYPUT, 0, mime, payload)
+
+    @staticmethod
+    def _set_position(obj, x, y):
+        """Move a positional object (caption, arrow, atom) to x, y in points."""
+        try:
+            pos = obj.Position
+            pos.X = x
+            pos.Y = y
+            obj.Position = pos
+            return True
+        except Exception:
+            return False
+
+    def _validate_input(self, representation, fmt):
+        """RDKit pre-validation for formats it can parse; Kekulized output
+        (explicit double bonds, no aromatic-circle rendering in ChemDraw —
+        see enumeration.validate_smiles). Formats RDKit can't judge (name,
+        cdxml, helm...) pass through unchanged."""
+        if fmt == "smiles":
+            return enumeration.validate_smiles(representation)
+        if fmt in ("molfile", "molfile-v3000"):
+            return enumeration.validate_molblock(representation)
+        return representation
+
+    def _insert_structure_units(self, doc, representation, fmt):
+        """Insert and return the new units (worker thread). Verifies atoms
+        actually appeared — an unknown/silently-ignored payload is an error,
+        not a success."""
+        mime = t.mime_for(fmt)
+        atoms_before = doc.Atoms.Count
+        groups_before = doc.Groups.Count
+        self._insert_raw(doc.Objects, mime, representation)
+        if doc.Atoms.Count == atoms_before:
+            raise InvalidInputError(
+                f"ChemDraw did not insert anything for the given {fmt} input "
+                f"({representation[:80]!r}). Check the input is valid."
+            )
+        new_units = [
+            doc.Groups.Item(i)
+            for i in range(groups_before + 1, doc.Groups.Count + 1)
+        ]
+        return new_units
+
+    def _describe_units(self, doc, units):
+        w, h = float(doc.Width or 540), float(doc.Height or 720)
+        return [state.describe_unit(u, w, h) for u in units]
