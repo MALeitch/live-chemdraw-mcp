@@ -3,7 +3,7 @@ import base64
 
 from mcp.server.fastmcp import Image
 
-from ._common import TARGET_DOC, as_json, parse_json_arg, parse_optional_json_arg
+from ._common import TARGET_DOC, as_json
 
 
 def register(mcp, bridge):
@@ -139,7 +139,7 @@ def register(mcp, bridge):
 
     @mcp.tool(description=(
         "Transform structures, or an arbitrary SUB-SELECTION of one "
-        "structure's atoms/bonds (pass atom_refs_json/bond_refs_json from "
+        "structure's atoms/bonds (pass atom_refs/bond_refs from "
         "chemdraw_list_atoms or chemdraw_split_at_bond — e.g. to fold/flip "
         "one branch of a molecule without rescaling the whole thing, which "
         "would break the shared bond-length convention across a figure). "
@@ -154,9 +154,8 @@ def register(mcp, bridge):
     def chemdraw_transform(target: str = "selection", action: str = "clean",
                            dx: float = 0, dy: float = 0, degrees: float = 0,
                            factor: float = 1.0, vertical: bool = False,
-                           atom_refs_json: str = "", bond_refs_json: str = "") -> str:
-        atom_refs = parse_optional_json_arg(atom_refs_json, "atom_refs_json", list)
-        bond_refs = parse_optional_json_arg(bond_refs_json, "bond_refs_json", list)
+                           atom_refs: list[str] | None = None,
+                           bond_refs: list[str] | None = None) -> str:
         return as_json(bridge.transform(_parse(target), action, dx=dx, dy=dy,
                                         degrees=degrees, factor=factor,
                                         vertical=vertical, atom_refs=atom_refs,
@@ -222,7 +221,7 @@ def register(mcp, bridge):
     @mcp.tool(description=(
         "Apply many atom edits in ONE call instead of one call per atom — "
         "the fast path once chemdraw_list_atoms has given you the refs for "
-        "everything you need to change. edits_json: JSON list like "
+        "everything you need to change. edits: list like "
         "[{\"target\": \"claude-...\", \"atom\": \"a42\", \"element\": "
         "\"N\"}, {\"target\": \"claude-...\", \"atom\": \"a57\", "
         "\"set_charge\": true, \"charge\": -1}, ...] (atom accepts a ref "
@@ -230,21 +229,21 @@ def register(mcp, bridge):
         "plus `unexpected_changes` — any structure that changed WITHOUT "
         "being in your list — the same before/after diff "
         "chemdraw_move_objects uses."))
-    def chemdraw_edit_atoms(edits_json: str) -> str:
-        return as_json(bridge.edit_atoms(parse_json_arg(edits_json, "edits_json", list)))
+    def chemdraw_edit_atoms(edits: list[dict]) -> str:
+        return as_json(bridge.edit_atoms(edits))
 
     @mcp.tool(description=(
         "Apply many bond edits in ONE call instead of one call per bond — "
         "the fast path once chemdraw_list_atoms has given you the refs for "
-        "everything you need to change. edits_json: JSON list like "
+        "everything you need to change. edits: list like "
         "[{\"target\": \"claude-...\", \"bond\": \"b12-45\", "
         "\"bond_order\": \"double\"}, ...] (bond accepts a ref or a "
         "1-based index). Returns `applied` and `failed` per-item, plus "
         "`unexpected_changes` — any structure that changed WITHOUT being "
         "in your list — the same before/after diff chemdraw_move_objects "
         "uses."))
-    def chemdraw_edit_bonds(edits_json: str) -> str:
-        return as_json(bridge.edit_bonds(parse_json_arg(edits_json, "edits_json", list)))
+    def chemdraw_edit_bonds(edits: list[dict]) -> str:
+        return as_json(bridge.edit_bonds(edits))
 
     @mcp.tool(description=(
         "Grow a structure by bonding a new atom to an existing one, then "
