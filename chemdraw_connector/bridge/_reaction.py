@@ -1,7 +1,7 @@
 """Reaction scheme layout: reactants + arrow + products."""
 from .. import targets
 from ..domain import layout_math
-from ..domain.reagent_text import subscript_formula_numbers
+from ..domain.reagent_text import build_text_cdxml, split_subscript_runs
 from ._plumbing import SLOW_TIMEOUT
 
 _POSITION_TOLERANCE = 0.5  # points; see the verify-and-correct step below
@@ -56,6 +56,17 @@ class _Reaction:
         computed above, so a long reagents string ended up centered over a
         gap the drawn arrow barely spanned. Fixed by setting Start/End
         explicitly to the full reserved width instead of just Position.
+
+        Reagent formula subscripts (the "3" in PPh3, "2"/"3" in K2CO3) are
+        real ChemDraw text formatting, not a Unicode-character substitute:
+        Caption.Styles has no way to add a new formatted run to an
+        EXISTING caption through COM (confirmed live, no Add method), but
+        a caption built from CDXML text at insertion time can have
+        multiple <s> runs, and a CDX text run's face="32" attribute is
+        genuine subscript (font shrink + baseline shift, confirmed live) --
+        so the reagents caption is now constructed as CDXML instead of a
+        plain MakeCaption()+.Text= call. See domain/reagent_text.py for
+        which digits get treated as formula subscripts.
         """
         reactants = [self._validate_input(r, fmt) for r in reactants]
         products = [self._validate_input(p, fmt) for p in products]
@@ -78,21 +89,27 @@ class _Reaction:
             # purely to measure its real rendered width up front -- needed
             # both to center it later (see docstring) and to size the
             # arrow's reserved space around it (CleanRXN+'s auto-width
-            # rule). Reused in phase 4 rather than recreated.
+            # rule). Reused in phase 4 rather than recreated. Built as
+            # CDXML (see docstring) so formula-subscript digits get real
+            # ChemDraw text formatting, not a Unicode-character
+            # substitute. Falls back to a plain caption if that insertion
+            # doesn't take for any reason -- the reagents text must never
+            # just silently disappear.
             reagents_cap = None
             reagents_width = 0.0
             if reagents_text:
-                reagents_cap = doc.MakeCaption()
-                # Formula subscripts (the "3" in PPh3, "2"/"3" in K2CO3)
-                # via Unicode subscript digits, not ChemDraw's own
-                # rich-text runs -- Caption.Styles has no way to add a new
-                # formatted run through COM (confirmed live, no Add
-                # method), but ChemDraw renders Unicode subscript
-                # characters correctly, so this sidesteps that limitation
-                # entirely. See domain/reagent_text.py for what does and
-                # doesn't get subscripted (temperatures/equivalents/step
-                # numbers are deliberately left alone).
-                reagents_cap.Text = subscript_formula_numbers(reagents_text)
+                runs = split_subscript_runs(reagents_text)
+                cdxml = build_text_cdxml(runs, x=0, y=0, width=500, height=14)
+                caps_before = doc.Captions.Count
+                try:
+                    self._insert_raw(doc.Objects, "text/xml", cdxml)
+                except Exception:
+                    pass
+                if doc.Captions.Count > caps_before:
+                    reagents_cap = doc.Captions.Item(doc.Captions.Count)
+                else:
+                    reagents_cap = doc.MakeCaption()
+                    reagents_cap.Text = reagents_text
                 try:
                     reagents_width = reagents_cap.Right - reagents_cap.Left
                 except Exception:
