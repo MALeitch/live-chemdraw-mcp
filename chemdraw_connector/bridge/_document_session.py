@@ -4,7 +4,7 @@ import os
 
 from .. import snapshots, state
 from ..domain import canvas
-from ..errors import ChemDrawError
+from ..errors import ChemDrawError, InvalidInputError
 from ._plumbing import SLOW_TIMEOUT
 
 
@@ -71,9 +71,35 @@ class _DocumentSession:
                     doc.Activate()
                     cleared = doc.Atoms.Count
                     doc.Objects.Clear()
+                    # doc.Objects.Clear() (above) does NOT clear doc.Graphics —
+                    # confirmed by test_bridge.py's own comment (~line 372):
+                    # "the shared scratch document can carry stray doc.Graphics
+                    # debris across sessions". Box-frame/decoration graphics
+                    # would otherwise silently accumulate across reuses.
+                    # doc.Graphics.Clear() is attempted by analogy: Clear() is
+                    # the established removal pattern elsewhere in this
+                    # codebase on IChemDrawObjects-family collections
+                    # (doc.Objects.Clear() just above, and
+                    # targets.unit_objects(u).Clear() in bridge.remove()), so
+                    # it's plausible Graphics supports it the same way — but
+                    # this specific collection/method pair has NOT been
+                    # live-verified. Guarded so a failure here (unsupported
+                    # method, or any other COM error) can never break scratch
+                    # acquisition, which is this call's actual job. NEEDS LIVE
+                    # CONFIRMATION: check that box-frame graphics actually
+                    # disappear from the scratch doc after a second
+                    # acquisition, and that this call doesn't error/crash.
+                    graphics_before = doc.Graphics.Count
+                    graphics_cleared = 0
+                    try:
+                        doc.Graphics.Clear()
+                        graphics_cleared = graphics_before
+                    except Exception:
+                        pass
                     self._doc_name = doc.name
                     return {"active_document": doc.name, "reused": True,
-                            "cleared_atoms": cleared}
+                            "cleared_atoms": cleared,
+                            "cleared_graphics": graphics_cleared}
             doc = app.Documents.Add()
             doc.Activate()
             entry = {"reused": False, "cleared_atoms": 0}
@@ -93,20 +119,86 @@ class _DocumentSession:
 
     def open_document(self, path):
         def go():
+            # An LLM client constructs this path, not a careful human typing
+            # it — validate up front so a hallucinated/misconstrued path
+            # fails with a clear, actionable message instead of a cryptic
+            # COM-layer error from Documents.Open.
+            if not os.path.exists(path):
+                raise InvalidInputError(
+                    f"No file found at {path!r}. Check the path and retry — "
+                    "it must point to an existing ChemDraw-readable file "
+                    "(.cdx/.cdxml/.mol/...)."
+                )
+            if not os.path.isfile(path):
+                raise InvalidInputError(
+                    f"{path!r} exists but is not a file (e.g. a directory). "
+                    "Pass the path to the document itself."
+                )
             doc = self._conn.app().Documents.Open(path)
             doc.Activate()
             return {"active_document": doc.name, "path": path}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
-    def save_document(self, path=None):
+    def save_document(self, path=None, overwrite=False):
         def go():
             doc = self._doc()
             if path:
+                self._guard_save_path(doc, path, overwrite)
                 doc.SaveAs(path)
             else:
                 doc.Save()
             return {"saved": True, "path": path or doc.FullName}
         return self._run(go, timeout=SLOW_TIMEOUT)
+
+    @staticmethod
+    def _guard_save_path(doc, path, overwrite):
+        """Validate a Save As target before handing it to COM. Two checks,
+        both aimed at "an LLM-constructed path shouldn't silently destroy
+        data", not at sandboxing (the user already has full filesystem
+        access — path traversal etc. is out of scope here):
+
+        1. Parent directory must exist — SaveAs into a missing directory
+           fails deep inside COM with an opaque error; catch it here with a
+           message that actually names the problem.
+        2. If `path` already exists on disk and is NOT the same file the
+           active document was already opened from, require an explicit
+           overwrite=True instead of silently clobbering it. Re-saving the
+           document you already have open (path == doc.FullName) is the
+           common "save my current document" case and is exempt — this only
+           gates SaveAs onto a *different*, pre-existing file, which is the
+           scenario a hallucinated path could hit by accident.
+
+        `overwrite` is exposed by the chemdraw_save_document MCP tool
+        (tools/structure.py) with the same default of False, so this gate is
+        bypassable but only deliberately, one call at a time.
+        """
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            raise InvalidInputError(
+                f"Cannot save to {path!r}: the containing directory "
+                f"{parent!r} does not exist. Create it first or choose a "
+                "different path."
+            )
+        if not os.path.exists(path) or overwrite:
+            return
+        try:
+            current = doc.FullName
+        except Exception:
+            current = None
+        same_file = False
+        if current:
+            try:
+                same_file = (os.path.normcase(os.path.abspath(path))
+                             == os.path.normcase(os.path.abspath(current)))
+            except Exception:
+                same_file = False
+        if not same_file:
+            raise InvalidInputError(
+                f"{path!r} already exists and is a different file than the "
+                "one currently open. Refusing to silently overwrite it — "
+                "pass overwrite=True if that's really intended, or choose a "
+                "different path."
+            )
 
     def undo(self):
         return self._run(lambda: (self._doc().Undo(), {"ok": True})[1])

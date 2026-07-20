@@ -50,9 +50,14 @@ def register(mcp, bridge):
         return as_json(bridge.open_document(path))
 
     @mcp.tool()
-    def chemdraw_save_document(path: str = "") -> str:
-        """Save the active document. With path, does Save As to that path."""
-        return as_json(bridge.save_document(path or None))
+    def chemdraw_save_document(path: str = "", overwrite: bool = False) -> str:
+        """Save the active document. With path, does Save As to that path.
+
+        Save As onto a DIFFERENT file that already exists on disk requires
+        overwrite=true — otherwise it's refused to avoid silently clobbering
+        something unrelated. Re-saving the document you already have open
+        (path omitted, or path == its current file) never needs this."""
+        return as_json(bridge.save_document(path or None, overwrite))
 
     @mcp.tool()
     def chemdraw_undo() -> str:
