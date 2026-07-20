@@ -26,7 +26,12 @@ the document you have open.
 - **Publication tools** — journal style presets, reaction schemes, and
   derivative-library enumeration with RDKit-computed properties
 
-Built and validated against **ChemDraw 22 (Revvity)** on Windows 11 /
+This README covers setup, architecture, and hard-won operational facts —
+not a per-tool reference. Each tool's exact parameters, return shape, and
+usage notes live in its own docstring, visible to any MCP client (Claude
+included) via its tool listing.
+
+Built and validated against **ChemDraw 26 (Revvity)** on Windows 11 /
 Python 3.14.
 
 > This is an independent, unofficial project. It is not affiliated with,
@@ -58,9 +63,14 @@ server attaches to a running ChemDraw (or launches one) over COM.
 
 ## Testing
 
-- `.venv\Scripts\python -m pytest` — unit tests for the pure logic
-  (layout math, style presets, HRMS text, dedup, numbering, diff, RDKit
-  enumeration). No ChemDraw required.
+- `.venv\Scripts\python -m pytest` — unit tests for the pure logic, all
+  running against fakes/fixtures with no live ChemDraw required: layout
+  math, style presets, HRMS text, dedup, numbering, diff, RDKit
+  enumeration, CDXML parsing/graph-building, substructure/SMARTS matching,
+  canvas/caption classification, reagent-text subscript formatting, and
+  bond-splitting, plus connector-internals coverage for the COM worker's
+  timeout/nudge state machine and `targets.py`'s target-resolution and
+  stale-cache-retry logic.
 - `.venv\Scripts\python test_bridge.py` — live smoke test; drives a visible
   ChemDraw window end to end. Watch it run.
 
@@ -68,18 +78,33 @@ server attaches to a running ChemDraw (or launches one) over COM.
 
 ```
 chemdraw_connector/
-  com/         COM plumbing only: worker (single STA thread, timeouts,
-               wedge detection), connection (attach/relaunch/reconnect),
-               types (COM enums <-> readable vocabulary)
-  domain/      pure logic, zero COM imports, pytest-covered
-  bridge.py    the seam: every tool call goes through here
-  targets.py   structure addressing (tags, selection, doc) + safe
-               doc-scoped atom/bond access
-  state.py     canvas snapshots for get_document_state / diff
-  snapshots.py automatic .cdxml backups before batch operations
-tools/         thin MCP tool definitions
-server.py      FastMCP entry point (stdio)
+  com/           COM plumbing only: worker (single STA thread, timeouts,
+                 wedge detection), connection (attach/relaunch/reconnect),
+                 types (COM enums <-> readable vocabulary)
+  domain/        pure logic, zero COM imports, pytest-covered
+  bridge/        the seam: every tool call goes through here
+    __init__.py  composes ChemDrawBridge from the mixins below
+    _document_session.py, _enumeration.py, _layout.py, _manipulation.py,
+    _plumbing.py, _properties_qc.py, _reaction.py, _selection.py,
+    _shorthand.py, _state_diff.py, _stereochemistry.py, _structure_io.py,
+    _style.py    one focused mixin per concern (document lifecycle,
+                 layout, shorthand contraction, stereochemistry...)
+  targets.py     structure addressing (tags, selection, doc) + safe
+                 doc-scoped atom/bond access
+  state.py       canvas snapshots for get_document_state / diff
+  snapshots.py   automatic .cdxml backups before batch operations
+tools/           thin MCP tool definitions
+server.py        FastMCP entry point (stdio)
 ```
+
+`bridge/` used to be a single `bridge.py`; it was split into a package once
+the original file grew past 2,000 lines with ~90 methods covering unrelated
+concerns. Every consumer (`tools/*.py`, `server.py`, `test_bridge.py`) still
+calls `bridge.<method_name>(...)` as a flat attribute access — mixin
+composition in `__init__.py` makes every method directly callable on the
+`ChemDrawBridge` instance regardless of which file defines it, so the split
+is invisible from outside the package and the "every tool call goes
+through here" property is unchanged.
 
 ## Hard-won ChemDraw COM facts (do not relearn these the crash way)
 
