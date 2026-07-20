@@ -12,7 +12,7 @@ from ..com import types as t
 from ..com.connection import Connection, is_dead_proxy
 from ..com.worker import ComWorker, DEFAULT_TIMEOUT
 from ..domain import enumeration
-from ..errors import ChemDrawError, InvalidInputError
+from ..errors import ChemDrawError, InvalidInputError, UnexpectedConnectorError
 
 SLOW_TIMEOUT = 45.0  # name<->structure conversions and batch ops can be slow
 # expand_labels intentionally makes ONE COM call covering every matching
@@ -101,6 +101,20 @@ class _Plumbing:
                         f"backups in {snapshots.BACKUP_DIR}"
                     ) from exc
                 raise ChemDrawError(self._explain(exc)) from exc
+            except ChemDrawError:
+                # Already the correct, intentional client-facing type (e.g.
+                # raised by validation upstream) — pass through unchanged.
+                raise
+            except Exception as exc:
+                # Anything else (a plain ValueError from bad input, an
+                # unexpected AttributeError from a real bug, an RDKit
+                # exception, ...) would otherwise reach the MCP client as a
+                # raw, unfiltered Python exception string. Wrap it in the
+                # connector's usual readable-error vocabulary — chaining
+                # (`from exc`) keeps the original traceback intact for
+                # server-side debugging even though the client only sees the
+                # friendly message.
+                raise UnexpectedConnectorError(exc) from exc
         return self._worker.submit(wrapped, timeout=timeout)
 
     @staticmethod
@@ -184,7 +198,52 @@ class _Plumbing:
             doc.Groups.Item(i)
             for i in range(groups_before + 1, doc.Groups.Count + 1)
         ]
-        return new_units
+        return self._drop_wrapper_groups(new_units)
+
+    @staticmethod
+    def _drop_wrapper_groups(units):
+        """A single insertion payload with disconnected fragments (a salt,
+        e.g. "[Na+].[OH-]") makes ChemDraw register one extra wrapper Group
+        -- bounds and formula equal to the UNION of its own child fragments
+        -- in doc.Groups alongside those children, which also each appear
+        independently. Confirmed live: chemdraw_insert_structure on
+        "[Na+].[OH-]" returned 3 groups (HNaO wrapping Na+ and HO-), not the
+        2 real ions; treating the wrapper as a positionable unit alongside
+        its own children double-moved/double-positioned the same
+        underlying atoms, which is what made reaction-scheme salt
+        fragments overlap their own wrapper.
+
+        Drop any unit whose bounding box strictly contains another unit's
+        in this same batch -- a wrapper's bounds always strictly contain
+        its children's combined bounds (larger area, not just touching),
+        while two genuinely independent fragments never fully contain one
+        another (disconnected structures never overlap by construction).
+        Only compares units from the SAME insertion call, never against
+        pre-existing document content, so this can't misfire on an
+        unrelated nearby structure. Falls back to returning every unit
+        unfiltered if bounds can't be read for some reason, rather than
+        risking dropping a real structure on a guess."""
+        boxes = []
+        for u in units:
+            try:
+                boxes.append((u.Left, u.Top, u.Right, u.Bottom))
+            except Exception:
+                return units
+
+        def area(b):
+            return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+        def strictly_contains(outer, inner, tol=0.5):
+            return (outer[0] <= inner[0] + tol and outer[1] <= inner[1] + tol
+                    and outer[2] >= inner[2] - tol and outer[3] >= inner[3] - tol
+                    and area(outer) > area(inner) + tol)
+
+        kept = [
+            u for i, u in enumerate(units)
+            if not any(j != i and strictly_contains(boxes[i], boxes[j])
+                       for j in range(len(units)))
+        ]
+        return kept or units
 
     def _describe_units(self, doc, units):
         w, h = float(doc.Width or 540), float(doc.Height or 720)

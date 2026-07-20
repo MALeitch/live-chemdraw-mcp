@@ -43,3 +43,21 @@ class NothingSelectedError(ChemDrawError):
 
 class InvalidInputError(ChemDrawError):
     """Chemically invalid input caught before or during a ChemDraw call."""
+
+
+class UnexpectedConnectorError(ChemDrawError):
+    """A non-COM, non-ChemDrawError exception escaped a mutating call — a
+    plain bug (bad input handling, an unexpected AttributeError, an RDKit
+    exception, ...) rather than a normal chemistry/COM failure. Wrapped so
+    the client still gets the connector's usual readable-error vocabulary
+    instead of a raw Python traceback string, without hiding what actually
+    happened."""
+
+    def __init__(self, exc):
+        super().__init__(
+            f"Unexpected connector error ({type(exc).__name__}): {exc}. "
+            "This looks like a bug in the connector itself rather than a "
+            "normal chemistry/COM problem — the ChemDraw window and any "
+            "in-progress edit should be unaffected, but the operation did "
+            "not complete."
+        )
