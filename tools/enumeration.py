@@ -17,8 +17,13 @@ def register(mcp, bridge):
         currently selected ChemDraw structure (draw the R position as an
         attachment point / dummy atom). substituents: list of SMILES
         fragments — include [*] to mark the bond atom, or the first atom is
-        used. properties: list from mw, exact_mass, formula, logp,
-        tpsa, hbd, hba, rotatable_bonds, inchikey (default mw+formula).
+        used (max 500 per call). properties: list from mw, exact_mass,
+        formula, logp, tpsa, hbd, hba, rotatable_bonds, inchikey (default
+        mw+formula). format: how `scaffold` is encoded — "smiles" (default)
+        or "molfile". This tool's format list is NARROWER than
+        chemdraw_insert_structure's (which also accepts inchi, name, cdxml,
+        cml, helm) — those extra values are NOT valid here and will be
+        rejected; the two `format` parameters are not interchangeable.
         Runs without per-molecule ChemDraw round-trips, so 50+ derivatives is
         fast. Pair with chemdraw_export_data_table for a CSV."""
         return as_json(bridge.enumerate_derivatives(

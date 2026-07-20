@@ -181,3 +181,27 @@ def test_dummy_nickname_nodes_are_inert():
 def test_atom_ids_are_graph_ids_not_indices():
     found = find("CCc1ccccc1")
     assert all(a >= 1000 for a in found[0]["atom_ids"])
+
+
+# ---- Kekulize guard ----
+
+def test_find_contractions_wraps_kekulize_failure_as_valueerror(monkeypatch):
+    # A real "sanitizes fine but fails a later re-Kekulize" SMILES is hard to
+    # construct reliably (in this RDKit version MolSanitizeException/
+    # KekulizeException already subclasses ValueError, and SanitizeMol's own
+    # kekulize step tends to reject anything a later Kekulize call would
+    # reject too). We still need to guarantee find_contractions never lets a
+    # raw RDKit exception through — the task's own note is that RDKit's
+    # Kekulize exception is *not guaranteed* to be a ValueError subclass, and
+    # the bridge's `except ValueError` guard around contraction relies on
+    # that. So simulate the failure via dependency injection and check the
+    # wrapping behavior directly rather than the underlying exception type.
+    mol, id_by_idx = substructures.build_mol(graph_from_smiles("c1ccccc1"))
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated RDKit kekulization failure")
+
+    monkeypatch.setattr(substructures.Chem, "Kekulize", boom)
+    with pytest.raises(ValueError, match="kekuliz"):
+        substructures.find_contractions(
+            mol, id_by_idx, substructures.resolve_groups("auto"))

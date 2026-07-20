@@ -223,7 +223,12 @@ def find_contractions(mol, id_by_idx, shorthands):
     # double orders onto the matched bonds or the nested fragment degrades
     # to the all-single-bond skeleton.
     kek = Chem.Mol(mol)
-    Chem.Kekulize(kek, clearAromaticFlags=True)
+    try:
+        Chem.Kekulize(kek, clearAromaticFlags=True)
+    except Exception as exc:
+        raise ValueError(
+            f"Structure could not be kekulized for substructure contraction "
+            f"(aromatic-perception failure): {exc}") from exc
 
     claimed = set()
     found = []

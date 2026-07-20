@@ -79,11 +79,13 @@ def _prep_with_map(smiles, map_num, what):
     return mol
 
 
-def fuse(scaffold_smiles, substituent_smiles):
-    """Join scaffold and substituent at their [*] atoms. Returns Mol."""
-    scaffold = _prep_with_map(scaffold_smiles, 1, "scaffold")
+def _fuse_prepped(scaffold_mol, substituent_smiles):
+    """Fuse an already-prepped (parsed + [*]-mapped) scaffold Mol with a
+    substituent SMILES. Split out of fuse() so a batch of substituents can
+    reuse one parsed/mapped scaffold instead of re-parsing it every time —
+    see enumerate_derivatives, which is the hot path for this."""
     sub = _prep_with_map(substituent_smiles, 1, "substituent")
-    combined = Chem.CombineMols(scaffold, sub)
+    combined = Chem.CombineMols(scaffold_mol, sub)
     try:
         zipped = Chem.molzip(combined)
     except Exception as exc:
@@ -93,6 +95,12 @@ def fuse(scaffold_smiles, substituent_smiles):
     zipped = RemoveHs(zipped)
     Chem.SanitizeMol(zipped)  # raises on chemical nonsense
     return zipped
+
+
+def fuse(scaffold_smiles, substituent_smiles):
+    """Join scaffold and substituent at their [*] atoms. Returns Mol."""
+    scaffold = _prep_with_map(scaffold_smiles, 1, "scaffold")
+    return _fuse_prepped(scaffold, substituent_smiles)
 
 
 def compute_properties(mol, properties):
@@ -111,12 +119,23 @@ def compute_properties(mol, properties):
 def enumerate_derivatives(scaffold_smiles, substituents, properties):
     """Returns (rows, failures). Each row: substituent + smiles + properties.
     Failures are collected, not raised — one bad fragment shouldn't sink 49
-    good ones."""
+    good ones.
+
+    The scaffold is parsed and [*]-mapped once (not once per substituent —
+    it doesn't change across the batch) and the prepped Mol is reused for
+    every fuse. If the scaffold itself is invalid, every substituent is
+    reported as a failure with that same error, matching the "collect, don't
+    raise" contract instead of blowing up the whole call."""
     props = list(dict.fromkeys(["smiles", *properties]))
     rows, failures = [], []
+    try:
+        scaffold_mol = _prep_with_map(scaffold_smiles, 1, "scaffold")
+    except ValueError as exc:
+        error = str(exc)
+        return rows, [{"substituent": sub, "error": error} for sub in substituents]
     for sub in substituents:
         try:
-            mol = fuse(scaffold_smiles, sub)
+            mol = _fuse_prepped(scaffold_mol, sub)
             row = {"substituent": sub}
             row.update(compute_properties(mol, props))
             rows.append(row)

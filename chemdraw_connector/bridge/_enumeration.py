@@ -7,9 +7,24 @@ from ..domain import enumeration
 from ..errors import InvalidInputError
 
 
+_SUPPORTED_FORMATS = ("smiles", "molfile")
+_MAX_SUBSTITUENTS = 500
+
+
 class _Enumeration:
     def enumerate_derivatives(self, substituents, scaffold=None, fmt="smiles",
                               properties=("mw", "formula")):
+        if fmt not in _SUPPORTED_FORMATS:
+            raise InvalidInputError(
+                f"Unsupported format {fmt!r} for chemdraw_enumerate_derivatives. "
+                f"Supported formats: {', '.join(_SUPPORTED_FORMATS)}."
+            )
+        if len(substituents) > _MAX_SUBSTITUENTS:
+            raise InvalidInputError(
+                f"Too many substituents ({len(substituents)}); "
+                f"chemdraw_enumerate_derivatives supports at most "
+                f"{_MAX_SUBSTITUENTS} per call."
+            )
         if scaffold is None:
             exported = self.export_structure("smiles", "selection")["structures"]
             if not exported:
