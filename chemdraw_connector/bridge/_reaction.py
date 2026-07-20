@@ -5,8 +5,6 @@ from ..domain.reagent_text import build_text_cdxml, split_subscript_runs
 from ._plumbing import SLOW_TIMEOUT
 
 _POSITION_TOLERANCE = 0.5  # points; see the verify-and-correct step below
-_MIN_ARROW_LEN = 70.0
-_ARROW_TEXT_PADDING = 20.0  # CleanRXN+'s auto-width margin around reagent text
 
 
 class _Reaction:
@@ -114,7 +112,7 @@ class _Reaction:
                     reagents_width = reagents_cap.Right - reagents_cap.Left
                 except Exception:
                     reagents_width = 0.0
-            arrow_len = max(_MIN_ARROW_LEN, reagents_width + _ARROW_TEXT_PADDING)
+            arrow_len = layout_math.arrow_length_for_reagents(reagents_width)
 
             # Phase 2: plan every x position from each unit's width alone
             # (widths are stable right after insertion even though
@@ -122,25 +120,23 @@ class _Reaction:
             # structure still had the correct bounding-box size). Records
             # the "+" caption x's here too, so phase 4 places them from
             # this one plan instead of recomputing the same layout twice.
-            x = 60.0
+            # The actual position math is pure (domain/layout_math.py,
+            # unit-tested there) -- this just feeds it widths and zips the
+            # result back onto the live COM units.
+            reactant_widths = [[u.Right - u.Left for u in units]
+                               for units in reactant_units]
+            product_widths = [[u.Right - u.Left for u in units]
+                              for units in product_units]
+            (reactant_x, product_x, plus_positions,
+             arrow_left_x) = layout_math.plan_reaction_layout(
+                reactant_widths, product_widths, arrow_len,
+                start_x=60.0, gap=gap, plus_width=plus_width)
+
             structure_plan = []  # (unit, target_left)
-            plus_positions = []
-
-            def lay_out_group(groups):
-                nonlocal x
-                for i, units in enumerate(groups):
-                    if i:
-                        plus_positions.append(x)
-                        x += plus_width
-                    for u in units:
-                        w = u.Right - u.Left
-                        structure_plan.append((u, x))
-                        x += w + gap
-
-            lay_out_group(reactant_units)
-            arrow_left_x = x
-            x += arrow_len + gap
-            lay_out_group(product_units)
+            for units, group_x in zip(reactant_units, reactant_x):
+                structure_plan.extend(zip(units, group_x))
+            for units, group_x in zip(product_units, product_x):
+                structure_plan.extend(zip(units, group_x))
 
             # Phase 3: move every structure to its planned position, then
             # verify the move actually landed -- re-reading live bounds
@@ -165,14 +161,50 @@ class _Reaction:
             # position is locked in. Every caption here is centered on its
             # own measured width, not just anchored at a raw point (see
             # docstring: Position.X is the caption's LEFT edge).
-            def place_centered_caption(text, center_x, center_y):
+            #
+            # Every Position set here is verified and corrected once if it
+            # didn't land -- the same "measure the real result, don't trust
+            # a single call" pattern phase 3 already applies to structure
+            # Move(). Added after a live incident where a reagents-text
+            # caption ended up ~140pt away from its intended position with
+            # no error raised; the two live repros run immediately
+            # afterward against a clean single-client ChemDraw session both
+            # landed correctly on the first try, so the likely cause was
+            # cross-client contention (multiple automation clients hitting
+            # the same shared scratch document at once -- see README's
+            # contention note) rather than a deterministic bug in this
+            # positioning logic. This verify-and-correct doesn't depend on
+            # knowing that root cause: it catches and self-heals any
+            # single-call placement failure, whatever produces it, the same
+            # way phase 3 already does for structures. If a placement still
+            # doesn't land after the retry, it's reported in
+            # violations.mislaid_captions rather than silently trusted.
+            mislaid = []
+
+            def _place_and_verify(obj, target_x, target_y):
+                self._set_position(obj, target_x, target_y)
+                landed = _at(obj, target_x, target_y)
+                if not landed:
+                    self._set_position(obj, target_x, target_y)
+                    landed = _at(obj, target_x, target_y)
+                return landed
+
+            def _at(obj, target_x, target_y):
+                try:
+                    return (abs(obj.Position.X - target_x) <= _POSITION_TOLERANCE
+                            and abs(obj.Position.Y - target_y) <= _POSITION_TOLERANCE)
+                except Exception:
+                    return False
+
+            def place_centered_caption(label, text, center_x, center_y):
                 cap = doc.MakeCaption()
                 cap.Text = text
                 try:
                     w = cap.Right - cap.Left
                 except Exception:
                     w = 0.0
-                self._set_position(cap, center_x - w / 2.0, center_y)
+                if not _place_and_verify(cap, center_x - w / 2.0, center_y):
+                    mislaid.append(label)
                 return cap
 
             decorations = []  # (label, obj) for every non-structure element,
@@ -180,7 +212,8 @@ class _Reaction:
             # a caption or the arrow colliding with something is just as
             # "not clean" as two structures colliding.
             for i, px in enumerate(plus_positions):
-                decorations.append((f"+{i}", place_centered_caption("+", px, y)))
+                label = f"+{i}"
+                decorations.append((label, place_centered_caption(label, "+", px, y)))
 
             arrow_center_x = arrow_left_x + arrow_len / 2.0
             arrow_ok = False
@@ -209,14 +242,16 @@ class _Reaction:
                 decorations.append(("arrow", arrow))
             except Exception:
                 decorations.append(
-                    ("arrow", place_centered_caption("→", arrow_center_x, y)))
+                    ("arrow", place_centered_caption("arrow", "→", arrow_center_x, y)))
 
             if reagents_cap is not None:
                 try:
                     w = reagents_cap.Right - reagents_cap.Left
                 except Exception:
                     w = reagents_width
-                self._set_position(reagents_cap, arrow_center_x - w / 2.0, y - 24.0)
+                if not _place_and_verify(reagents_cap, arrow_center_x - w / 2.0,
+                                         y - 24.0):
+                    mislaid.append("reagents_text")
                 decorations.append(("reagents_text", reagents_cap))
 
             # Verify the whole scheme, not just trust the layout math: read
@@ -242,7 +277,8 @@ class _Reaction:
             return {
                 "object_ids": ids,
                 "arrow_native": arrow_ok,
-                "violations": {"overlapping": [list(p) for p in overlaps]},
+                "violations": {"overlapping": [list(p) for p in overlaps],
+                                "mislaid_captions": mislaid},
                 "backup_path": backup,
                 "preview_png_base64": self._preview_png(doc),
             }

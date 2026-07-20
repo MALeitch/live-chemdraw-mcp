@@ -14,6 +14,11 @@ def register(mcp, bridge):
         look at it and adjust if the layout needs work. ALWAYS also check
         `violations.overlapping`: every structure, the arrow, and every
         caption are checked pairwise after layout, so any collision is
-        reported here rather than only visible in the preview image."""
+        reported here rather than only visible in the preview image. Also
+        check `violations.mislaid_captions`: a list of any caption/arrow
+        label whose position was verified after placement and didn't land
+        where intended even after one retry — should be empty in normal
+        use; if it isn't, look at the preview image before trusting the
+        layout."""
         return with_preview(bridge.make_reaction_scheme(
             reactants, products, reagents_text or None, format))

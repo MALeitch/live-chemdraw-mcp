@@ -132,6 +132,73 @@ def distribute_vertical(item_sizes, container, margin=6.0, min_gap=4.0,
     return positions, round(overflow, 1)
 
 
+def arrow_length_for_reagents(reagents_width, min_len=70.0, padding=20.0):
+    """Reserved arrow span for a reaction scheme's reagents/conditions text.
+
+    Grows with the reagents-text width instead of staying a fixed length
+    regardless of how long the conditions string is -- CleanRXN+'s (a
+    separate, working ChemDraw add-in for reaction-scheme layout)
+    auto-width rule: arrow space = max(default, reagent text width +
+    padding)."""
+    return max(min_len, reagents_width + padding)
+
+
+def plan_reaction_layout(reactant_groups, product_groups, arrow_len,
+                         start_x=60.0, gap=24.0, plus_width=18.0,
+                         intra_group_gap=8.0):
+    """Plan x-positions for a one-row reactants -> arrow -> products scheme.
+
+    reactant_groups/product_groups: each a list of "groups", where a group
+    is the list of unit widths belonging to one logical structure (usually
+    one width, but a structure that ChemDraw splits into several placed
+    objects -- e.g. a salt's ion pair -- is a group of more than one width).
+    A "+" caption is placed BETWEEN groups, never within one; units WITHIN a
+    group are laid out contiguously using `intra_group_gap`, not `gap` --
+    confirmed live that reusing the same 24pt inter-group gap made a salt's
+    ion pair (e.g. Na+ / OH-) read as two unrelated reactants rather than
+    one structure, since it's the same spacing used across an actual "+".
+    `intra_group_gap` defaults much tighter so a multi-fragment structure
+    still visually reads as one unit. The trailing gap after a group's LAST
+    fragment (leading into the next "+"/group or the arrow) is always the
+    full `gap`, unaffected by `intra_group_gap`. arrow_len is the
+    already-sized arrow span (see arrow_length_for_reagents) reserved
+    between the last reactant group and the first product group, with `gap`
+    on both sides of it.
+
+    Returns (reactant_positions, product_positions, plus_positions,
+    arrow_left_x):
+    - reactant_positions/product_positions: lists parallel to the input
+      groups, each itself a list of target_left floats parallel to that
+      group's unit widths.
+    - plus_positions: the x of every "+" caption, reactants' internal ones
+      (if any) followed by products' (if any).
+    - arrow_left_x: the arrow's left edge.
+    """
+    x = start_x
+    plus_positions = []
+
+    def lay_out(groups):
+        nonlocal x
+        positions = []
+        for i, widths in enumerate(groups):
+            if i:
+                plus_positions.append(x)
+                x += plus_width
+            group_positions = []
+            last = len(widths) - 1
+            for j, w in enumerate(widths):
+                group_positions.append(x)
+                x += w + (gap if j == last else intra_group_gap)
+            positions.append(group_positions)
+        return positions
+
+    reactant_positions = lay_out(reactant_groups)
+    arrow_left_x = x
+    x += arrow_len + gap
+    product_positions = lay_out(product_groups)
+    return reactant_positions, product_positions, plus_positions, arrow_left_x
+
+
 def shelf_pack(item_sizes, container, order=None, h_gap=8.0, v_gap=8.0):
     """First-fit shelf packing: place item_sizes[i] = (w, h) into rows within
     `container` (a Box used as a hard boundary — e.g. an existing panel

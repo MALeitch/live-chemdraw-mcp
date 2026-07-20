@@ -1,6 +1,7 @@
 from chemdraw_connector.domain.layout_math import (
-    Box, caption_anchor, choose_columns, distribute_vertical, find_overlaps,
-    grid_positions, page_width_points, shelf_pack,
+    Box, arrow_length_for_reagents, caption_anchor, choose_columns,
+    distribute_vertical, find_overlaps, grid_positions, page_width_points,
+    plan_reaction_layout, shelf_pack,
 )
 
 
@@ -155,3 +156,89 @@ def test_distribute_vertical_single_item_centered():
         [(40, 20)], Box(0, 0, 100, 100), margin=10)
     assert overflow == 0.0
     assert positions[0][1] == 40  # (80 inner - 20)/2 + 10 margin
+
+
+def test_arrow_length_for_reagents_floors_at_min():
+    # 5 + 20 padding = 25, well under the 70pt minimum
+    assert arrow_length_for_reagents(5.0) == 70.0
+    assert arrow_length_for_reagents(0.0) == 70.0
+
+
+def test_arrow_length_for_reagents_boundary_at_min():
+    # exactly reaches the minimum: 50 + 20 == 70
+    assert arrow_length_for_reagents(50.0) == 70.0
+
+
+def test_arrow_length_for_reagents_grows_with_wide_text():
+    # long reagents string (e.g. "Pd(PPh3)4, K2CO3, THF/H2O, 80 C") should
+    # widen the reserved arrow span past the fixed minimum
+    assert arrow_length_for_reagents(200.0) == 220.0
+
+
+def test_arrow_length_for_reagents_custom_min_and_padding():
+    assert arrow_length_for_reagents(10.0, min_len=40.0, padding=5.0) == 40.0
+    assert arrow_length_for_reagents(100.0, min_len=40.0, padding=5.0) == 105.0
+
+
+def test_plan_reaction_layout_two_reactants_one_product():
+    # A (w=50) + B (w=30) --arrow--> C (w=80)
+    reactant_positions, product_positions, plus_positions, arrow_left_x = (
+        plan_reaction_layout([[50], [30]], [[80]], arrow_len=70.0,
+                             start_x=60.0, gap=24.0, plus_width=18.0))
+    assert reactant_positions == [[60.0], [152.0]]
+    assert plus_positions == [134.0]  # "+" between the two reactants
+    assert arrow_left_x == 206.0
+    assert product_positions == [[300.0]]
+    # no product-side "+" since there's only one product group
+    assert len(plus_positions) == 1
+
+
+def test_plan_reaction_layout_multi_step_reagent_intermediate_product():
+    # reagent (w=40) --arrow--> intermediate (w=60) + salt byproduct
+    # (two fragments, w=20 and w=15), using non-default spacing (including
+    # a distinct intra_group_gap) to exercise the parameterization.
+    reactant_positions, product_positions, plus_positions, arrow_left_x = (
+        plan_reaction_layout([[40]], [[60], [20, 15]], arrow_len=70.0,
+                             start_x=10.0, gap=5.0, plus_width=8.0,
+                             intra_group_gap=2.0))
+    assert reactant_positions == [[10.0]]
+    assert arrow_left_x == 55.0  # 10 + 40 + 5
+    # first product group starts right after the arrow's reserved space
+    assert product_positions[0] == [130.0]  # 55 + 70 + 5
+    # second product group: "+" placed at 195 (130 + 60 + 5), THEN the x
+    # cursor advances past plus_width before its two fragments are laid
+    # out contiguously using intra_group_gap (2.0), not gap (5.0), between
+    # them
+    assert plus_positions == [195.0]
+    assert product_positions[1] == [203.0, 225.0]  # 195 + 8 plus_width, then +20+2
+
+
+def test_plan_reaction_layout_intra_group_gap_defaults_tighter_than_gap():
+    # A salt byproduct's two ion fragments (w=20, w=15) should sit closer
+    # together by default than two genuinely separate "+"-joined groups --
+    # confirmed live that reusing the inter-group gap for this made an ion
+    # pair (e.g. Na+ / OH-) read as two unrelated reactants.
+    _, product_positions, _, _ = plan_reaction_layout(
+        [[40]], [[20, 15]], arrow_len=70.0, start_x=10.0, gap=24.0,
+        plus_width=18.0)
+    salt_start, second_ion_start = product_positions[0]
+    intra_gap = second_ion_start - (salt_start + 20)
+    assert 0 < intra_gap < 24.0
+
+
+def test_plan_reaction_layout_wide_structure_pushes_downstream_positions():
+    # a very wide reactant should push the arrow and everything after it
+    # further right by exactly its extra width; a very narrow one should not
+    narrow_reactant, product_positions_n, _, arrow_left_narrow = (
+        plan_reaction_layout([[10]], [[30]], arrow_len=70.0))
+    wide_reactant, product_positions_w, _, arrow_left_wide = (
+        plan_reaction_layout([[500]], [[30]], arrow_len=70.0))
+    assert arrow_left_wide - arrow_left_narrow == 500.0 - 10.0
+    assert (product_positions_w[0][0] - product_positions_n[0][0]
+            == 500.0 - 10.0)
+
+
+def test_plan_reaction_layout_no_plus_signs_for_single_groups():
+    reactant_positions, product_positions, plus_positions, arrow_left_x = (
+        plan_reaction_layout([[40]], [[40]], arrow_len=70.0))
+    assert plus_positions == []
