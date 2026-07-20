@@ -17,7 +17,13 @@ class _Layout:
         without correcting for the caption's own width shifts long
         captions well off-center. Measure the caption's real rendered
         width right after setting its text (before positioning) and
-        subtract half of it."""
+        subtract half of it.
+
+        The caption is tagged with targets.tag_caption_owner right after
+        creation — this is the mechanism canvas.associate_captions actually
+        relies on to find this caption's structure again later (see that
+        function's docstring, tier 0), because the `cap.Group = unit` call
+        below is a confirmed no-op."""
         cap = doc.MakeCaption()
         cap.Text = text
         if bold:
@@ -31,7 +37,21 @@ class _Layout:
             cap_w = 0.0
         self._set_position(cap, center_x - cap_w / 2.0, y)
         try:
-            cap.Group = unit  # caption joins the structure's group
+            targets.tag_caption_owner(cap, targets.ensure_id(unit))
+        except Exception:
+            pass
+        try:
+            # KNOWN NO-OP, kept anyway: confirmed live (test_bridge.py) that
+            # this assignment raises nothing but reading cap.Group back
+            # afterward is always None on ChemDraw 26 (Professional
+            # 26.0.0.6141) — it never actually merges the caption into the
+            # structure's group. Left in place because it's a single
+            # try/excepted COM call (cheap) and costs nothing if a future
+            # ChemDraw version fixes the underlying bug, it starts working
+            # for free and reinforces the tag above rather than conflicting
+            # with it. The tag set just above is what this connector
+            # actually depends on today.
+            cap.Group = unit
         except Exception:
             pass
         return cap
@@ -140,7 +160,15 @@ class _Layout:
     def _gather_captions(doc):
         """Every caption on the page as (plain entries, live COM objects) —
         parallel lists, so callers can reason over the plain data and still
-        reach the COM object to move it. Worker thread only."""
+        reach the COM object to move it. Worker thread only.
+
+        tag_owner_id is read from targets.get_caption_owner (the
+        claude_caption_owner object tag _add_caption_to_unit stamps on
+        every caption this connector creates) — canvas.associate_captions
+        prefers it over group_id, since group_id is only ever populated for
+        captions the USER grouped by hand in ChemDraw's own UI (that path
+        isn't broken, only this connector's own `cap.Group = unit` call
+        is)."""
         entries, objs = [], []
         for i in range(1, doc.Captions.Count + 1):
             c = doc.Captions.Item(i)
@@ -149,11 +177,16 @@ class _Layout:
                 group_id = targets.ensure_id(grp) if grp is not None else None
             except Exception:
                 group_id = None
+            try:
+                tag_owner_id = targets.get_caption_owner(c)
+            except Exception:
+                tag_owner_id = None
             entries.append({
                 "text": c.Text or "",
                 "bounds": {"left": round(c.Left, 1), "top": round(c.Top, 1),
                           "right": round(c.Right, 1), "bottom": round(c.Bottom, 1)},
                 "group_id": group_id,
+                "tag_owner_id": tag_owner_id,
             })
             objs.append(c)
         return entries, objs
@@ -525,9 +558,12 @@ class _Layout:
     def get_layout(self, target="document"):
         """Full layout snapshot for planning a reorganization: every
         structure's id/formula/bounds (scoped to `target`), every caption's
-        text and which structure it belongs to (Caption.Group), and every
-        panel rectangle on the page (doc.Graphics) — all in ONE COM round
-        trip. Captions and boxes are always returned for the whole page
+        text and its raw ownership signals (group_id from Caption.Group,
+        tag_owner_id from the claude_caption_owner tag — see
+        canvas.associate_captions for how these are actually resolved to an
+        owning structure), and every panel rectangle on the page
+        (doc.Graphics) — all in ONE COM round trip. Captions and boxes are
+        always returned for the whole page
         (not scoped to `target`) since planning a move needs the
         surrounding context regardless of which structures are the actual
         subject.

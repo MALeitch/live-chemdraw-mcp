@@ -40,6 +40,60 @@ def _check_status_after_captioning(bridge, baseline):
     return after
 
 
+def _check_caption_tag_metadata(bridge, caption_text, expected_owner_id):
+    """Confirm, via the public get_layout surface (group_id/tag_owner_id
+    are exactly what bridge._gather_captions exposes), that a connector-
+    created caption's cap.Group = unit is still the confirmed no-op
+    (group_id None) and that it carries the claude_caption_owner tag
+    pointing at the structure it was made for instead."""
+    layout = bridge.get_layout("document")
+    entry = next((c for c in layout["captions"] if c["text"] == caption_text), None)
+    if entry is None:
+        raise AssertionError(f"caption {caption_text!r} not found in get_layout")
+    if entry.get("group_id") is not None:
+        raise AssertionError(
+            f"caption {caption_text!r} group_id is {entry['group_id']!r}, "
+            "expected None (cap.Group = unit is a confirmed silent no-op "
+            "on this ChemDraw version)")
+    if entry.get("tag_owner_id") != expected_owner_id:
+        raise AssertionError(
+            f"caption {caption_text!r} tag_owner_id is "
+            f"{entry.get('tag_owner_id')!r}, expected {expected_owner_id!r} "
+            "-- the claude_caption_owner tag is not being set/read correctly")
+    return entry
+
+
+def _check_caption_tag_survives_drift(bridge, target_id, caption_text,
+                                      dx=500.0, dy=500.0):
+    """Move the structure `target_id` dx,dy away WITHOUT its caption
+    (move_with_captions=False leaves the caption exactly where it was) --
+    well beyond both CAPTION_MAX_GAP_PT (60) and CAPTION_MAX_DISTANCE_PT
+    (120), and almost certainly nearer some other structure on a crowded
+    scope-table page than its own now-distant one. Proximity-based
+    association (canvas.associate_captions tiers 4/5) would misattribute or
+    drop this caption in that situation -- this is the exact caption-gap
+    failure mode fix_caption_gaps' docstring / README document. Confirms
+    the tag-based tier (tier 0) keeps the association correct anyway."""
+    bridge.move_objects([{"object_id": target_id, "dx": dx, "dy": dy}],
+                        move_with_captions=False)
+    try:
+        after = bridge.describe_canvas()
+        moved = next((s for s in after["structures"] if s["id"] == target_id), None)
+        if moved is None:
+            raise AssertionError(f"moved structure {target_id} not found after move")
+        if caption_text not in (moved.get("captions") or []):
+            raise AssertionError(
+                f"caption {caption_text!r} not associated with {target_id} "
+                f"after a ({dx},{dy})pt move (tag-based association broken): "
+                f"got {moved.get('captions')}")
+    finally:
+        # Move it back regardless of pass/fail so the scratch doc isn't left
+        # scattered for whatever check runs next.
+        bridge.move_objects([{"object_id": target_id, "dx": -dx, "dy": -dy}],
+                            move_with_captions=False)
+    return {"structure_id": target_id, "caption": caption_text}
+
+
 def read_modified(bridge):
     """Read-only observational probe, never assigned to: ChemDraw's COM
     type library exposes Document.Modified as a get/set bool (same shape
@@ -314,7 +368,27 @@ def main():
     bip = check("insert biphenyl", lambda: b.insert_structure("c1ccc(cc1)-c1ccccc1"))
     bip_id = bip["inserted"][0]["id"] if bip else None
     con = check("contract to shorthand", lambda: b.contract_to_shorthand(bip_id))
-    con_id = (con["contracted"][0]["id"] if con else None) or bip_id
+    # contract_to_shorthand can succeed (no exception, so check() returns its
+    # result) while still reporting an empty "contracted" list under
+    # "failed" for an individual unit -- contraction is per-unit isolated
+    # (see contract_to_shorthand's docstring), so one unit's failure doesn't
+    # raise here. This WAS live-hit by exactly that path: on a real
+    # ChemDraw contraction, _reresolve_after_mutation's untagged-candidate
+    # scan found the freshly-contracted label listed TWICE (once via
+    # iter_units' doc.Groups loop, once more via its doc.Atoms ->
+    # atom.Fragment loop rediscovering the identical element -- confirmed
+    # live to share the same COM .ID, see _shorthand.py's
+    # _reresolve_after_mutation for the full story) and raised "produced 2
+    # untagged candidates instead of exactly one". Fixed at the root by
+    # deduping same-.ID sightings before judging ambiguity -- but this
+    # `(con or {}).get(...)` guard is kept regardless, since ANY per-unit
+    # contraction failure (not just this one, now-fixed cause) would hit
+    # the same shape: `con` present, "contracted" empty. The old
+    # `con["contracted"][0]["id"] if con else None` crashed with IndexError
+    # in that case instead of falling back to bip_id like the trailing
+    # `or bip_id` clearly intended.
+    contracted = (con or {}).get("contracted") or []
+    con_id = (contracted[0]["id"] if contracted else None) or bip_id
     check("expand shorthand", lambda: b.expand_shorthand(con_id))
 
     print("== duplicates ==")
@@ -348,17 +422,22 @@ def main():
         assert scope.get("preview_png_base64"), "no preview image"
         assert scope.get("backup_path"), "no backup written"
     check("autonumber", lambda: b.autonumber("document"))
-    # NOTE: _add_caption_to_unit's `cap.Group = unit` turns out to be a
+    # NOTE: _add_caption_to_unit's `cap.Group = unit` is STILL a confirmed
     # SILENT NO-OP on this ChemDraw version (Professional 26.0.0.6141) —
-    # probed live: the assignment raises nothing, but reading cap.Group
-    # back is always None, so captions built via this connector never
-    # actually merge into their structure's Group here. That means this
-    # scratch scenario does NOT exercise real caption-wrapper duplication
-    # (unlike hand-grouped captions in a real user document, where
-    # find_wrapper_duplicates has been live-verified). structures_on_page
-    # staying at 6 here is therefore not yet proof of wrapper-exclusion —
-    # only that nothing ballooned it. See spawned follow-up task for the
-    # cap.Group regression itself.
+    # probed live, the assignment raises nothing but reading cap.Group back
+    # is always None. FIXED (this comment used to flag it as an open
+    # follow-up): _add_caption_to_unit now also stamps each caption with a
+    # persistent claude_caption_owner object tag (targets.tag_caption_owner)
+    # pointing at its structure's claude_id, and canvas.associate_captions
+    # prefers that tag ahead of Group-based lookup (tier 0). That still
+    # means this scratch scenario does NOT exercise real caption-wrapper
+    # duplication via Group merging (unlike hand-grouped captions in a real
+    # user document, where find_wrapper_duplicates has been live-verified)
+    # — structures_on_page staying at 6 here shows the tag-based path never
+    # spuriously creates a wrapper, not that Group-based wrapping works.
+    # The tag mechanism itself — including that it survives a structure
+    # moving well outside proximity range, the actual bug this fixes — is
+    # exercised directly below.
     check("status structures_on_page still 6 after captioning",
           lambda: expect_equal(b.status()["structures_on_page"], 6,
                                "structures_on_page"))
@@ -395,6 +474,25 @@ def main():
         assert os.path.exists(export["path"]), \
             f"export_canvas_table path does not exist: {export['path']}"
     check("diff_since_last_check", b.diff_since_last_check)
+
+    print("== caption tag-based association (cap.Group = unit fix) ==")
+    canvas_before_drift = check("describe_canvas before caption-tag drift test",
+                                b.describe_canvas)
+    drift_target = None
+    if canvas_before_drift:
+        captioned = [s for s in canvas_before_drift["structures"] if s.get("captions")]
+        drift_target = captioned[0] if captioned else None
+    if drift_target:
+        drift_id = drift_target["id"]
+        drift_caption = drift_target["captions"][0]
+        check(f"caption {drift_caption!r} metadata: group_id None, tag_owner_id set",
+              lambda: _check_caption_tag_metadata(b, drift_caption, drift_id))
+        check(f"move {drift_id} 500pt away (captions left behind); tag still "
+              "resolves it, not proximity",
+              lambda: _check_caption_tag_survives_drift(b, drift_id, drift_caption))
+    else:
+        print("SKIP  caption tag-based association drift test: "
+              "no captioned structure found on the page")
 
     print("== reaction scheme (cleared scratch) ==")
     check("clear scratch", b.use_scratch_document)

@@ -24,6 +24,17 @@ CAPTION_MAX_DISTANCE_PT = 120.0
 OVERFLOW_SLOP_PT = 2.0
 # Bounds-containment slop for wrapper-duplicate detection.
 WRAPPER_SLOP_PT = 1.5
+# Largest single-edge extension a containing structure's bounds may add
+# beyond a same-formula structure it contains before find_wrapper_duplicates
+# still treats it as a caption band (a wrapper) rather than a second,
+# larger, distinct structure. Real caption-wrapper margins observed live
+# (see find_wrapper_duplicates docstring and its tests) are 15-24pt; real
+# structure footprints in this codebase's examples run 80-180pt per
+# dimension. 32pt gives real captions comfortable headroom (bold text,
+# slightly larger font, a bit of padding) while still excluding a
+# same-formula, same-size isomer whose bounds happen to fully contain
+# another's by anything close to a structure-sized margin.
+WRAPPER_MAX_MARGIN_PT = 32.0
 
 
 def _center(b):
@@ -76,6 +87,17 @@ def _contains_bounds(outer, inner, slop=WRAPPER_SLOP_PT):
             and outer["bottom"] >= inner["bottom"] - slop)
 
 
+def _containment_margin(outer, inner):
+    """Largest single-edge distance `inner`'s bounds sit inside `outer`'s —
+    0 for an edge that (within slop) coincides, positive for one that's
+    genuinely inset. Assumes _contains_bounds(outer, inner) already holds;
+    small negative slop on any one edge is floored to 0 rather than let it
+    cancel out a genuinely large margin on another edge."""
+    return max(0.0,
+               inner["left"] - outer["left"], inner["top"] - outer["top"],
+               outer["right"] - inner["right"], outer["bottom"] - inner["bottom"])
+
+
 def find_wrapper_duplicates(structures):
     """{wrapper_id: wrapped_id} for phantom duplicates caused by nested
     groups.
@@ -88,6 +110,23 @@ def find_wrapper_duplicates(structures):
     the real structure's, and strictly larger (extended over the caption).
     Exact-duplicate pairs (equal bounds both ways) are left alone — those
     are real duplicates for find_duplicates to report, not wrappers.
+
+    KNOWN BLIND SPOT: two genuinely distinct structures that happen to
+    share a formula (e.g. constitutional isomers) AND happen to be laid
+    out with one's bounds fully containing the other's would still be
+    misclassified as a wrapper pair here — formula match plus bounds
+    containment is the only signal available without a substructure
+    comparison this module deliberately avoids (pure, no COM, no RDKit).
+    WRAPPER_MAX_MARGIN_PT narrows the window: it requires the containing
+    margin to look caption-sized (a thin band on one side) rather than
+    structure-sized (see its own comment for the observed numbers this is
+    based on), so two isomers would now also have to differ by less than
+    that margin in every dimension to be misclassified — much narrower
+    than the previous unbounded "just larger" check, though still not
+    impossible for two very similarly-sized isomers. Documented, not
+    eliminated; considered low-probability enough in normal figure layouts
+    not to chase further without a real live-observed false positive to
+    calibrate against.
     """
     out = {}
     for a in structures:
@@ -103,6 +142,9 @@ def find_wrapper_duplicates(structures):
                 continue
             if _area(ab) <= _area(bb) + 1.0:
                 continue  # not strictly larger: exact duplicate, keep both
+            if _containment_margin(ab, bb) > WRAPPER_MAX_MARGIN_PT:
+                continue  # extension too large to be a caption band --
+                          # likely a distinct, larger same-formula structure
             if best is None or _area(bb) < best[0]:
                 best = (_area(bb), b["id"])
         if best is not None:
@@ -126,7 +168,26 @@ def associate_captions(structures, captions, wrapper_map=None,
     """For each caption, the id of the structure it labels (or None).
 
     Preference order:
+    0. The caption carries a `tag_owner_id` (bridge._add_caption_to_unit /
+       targets.tag_caption_owner's claude_caption_owner object tag) that
+       resolves to a real structure or a wrapper duplicate of one -> use it
+       directly. This is the reliable tier for every caption THIS
+       connector's own tools create (arrange_grid, build_scope_table,
+       autonumber): `Caption.Group = unit` (tier 1 below) is a confirmed
+       silent no-op on ChemDraw 26 — the assignment raises nothing, but
+       reading `cap.Group` back afterward is always None — so without this
+       tag, every connector-created caption would fall straight through to
+       the spatial tiers (4/5), which misfire once a caption is separated
+       from its structure (see fix_caption_gaps' docstring and the
+       README's caption-gap incident for why that's a real, observed
+       failure mode, not a hypothetical one). A tag that doesn't resolve
+       to any known id (deleted structure, or a snapshot/region that
+       excludes it) falls through to the tiers below rather than being
+       trusted blindly.
     1. The caption's own group IS a real structure (grouped directly).
+       Reliable for a caption the USER grouped with its structure by hand
+       in ChemDraw's own UI — that path is not broken, only this
+       connector's own `cap.Group = unit` call is (see tier 0).
     2. The caption's group is a wrapper duplicate -> the wrapped structure
        (this is how Data-inserted structures' labels are actually grouped).
     3. The caption's group is a known NON-structure unit (a standalone
@@ -154,6 +215,14 @@ def associate_captions(structures, captions, wrapper_map=None,
              for s in structures if s.get("bounds")} if boxes else {}
     out = []
     for c in captions:
+        tag_owner = c.get("tag_owner_id")
+        if tag_owner is not None:
+            if tag_owner in ids:
+                out.append(tag_owner)
+                continue
+            if tag_owner in wrapper_map:
+                out.append(wrapper_map[tag_owner])
+                continue
         gid = c.get("group_id")
         if gid in ids:
             out.append(gid)

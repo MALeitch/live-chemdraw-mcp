@@ -60,6 +60,56 @@ def retag(unit):
     return oid
 
 
+CAPTION_OWNER_TAG = "claude_caption_owner"
+
+
+def tag_caption_owner(cap, owner_id):
+    """Stamp a Caption COM object with a persistent reference to the
+    claude_id of the structure it was created for.
+
+    Exists because `Caption.Group = unit` (the ChemDraw-native way to merge
+    a caption into its structure's group) is a confirmed silent no-op on
+    ChemDraw 26 (Professional 26.0.0.6141) — the assignment raises nothing,
+    but reading `cap.Group` back afterward is always None. Without this,
+    every caption this connector's own tools create (arrange_grid,
+    build_scope_table, autonumber) would have no reliable link back to its
+    structure at all, and canvas.associate_captions would have to fall
+    through to its weaker spatial heuristics for every single one.
+
+    Reuses the exact MakeObjectTag/StringValue mechanism already proven for
+    structure units above (TAG_NAME/get_id/_stamp_id) rather than inventing
+    a second identity scheme — live-verified (see test_bridge.py) that
+    MakeObjectTag/GetObjectTag work the same way on a Caption object as on
+    a Group/Fragment, and that the tag survives both moving the owning
+    structure away and being read back through a freshly re-enumerated
+    `doc.Captions.Item(i)` handle rather than the original object
+    reference."""
+    tag = cap.MakeObjectTag(CAPTION_OWNER_TAG, False)
+    tag.StringValue = owner_id
+    try:
+        tag.Visible = False
+        tag.Persistent = True
+    except Exception:
+        pass
+
+
+def get_caption_owner(cap):
+    """The claude_id of the structure `cap` was tagged for by
+    tag_caption_owner, or None if it was never tagged this way (hand-drawn
+    captions, captions from before this mechanism existed, or a caption
+    this connector created before this fix landed)."""
+    try:
+        tag = cap.GetObjectTag(CAPTION_OWNER_TAG)
+    except Exception:
+        return None
+    if tag is None:
+        return None
+    try:
+        return tag.StringValue or None
+    except Exception:
+        return None
+
+
 def doc_signature(doc):
     """Cheap O(1) fingerprint of a document's contents (three COM property
     reads, no scanning) used to tell whether a cached unit/atom/bond list

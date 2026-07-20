@@ -53,6 +53,25 @@ def test_different_formula_containment_is_not_a_wrapper():
     assert canvas.find_wrapper_duplicates([small, big]) == {}
 
 
+def test_large_margin_same_formula_containment_is_not_a_wrapper():
+    # A same-formula structure (e.g. a constitutional isomer) whose bounds
+    # happen to fully contain a smaller one's, by a margin far bigger than
+    # any real caption band observed live (15-24pt, see docstring) — this
+    # looks like two distinct structures, not a caption wrapper, so
+    # WRAPPER_MAX_MARGIN_PT should exclude it.
+    small = _structure("small", _b(10, 10, 40, 40))
+    big = _structure("big", _b(0, 0, 100, 100))  # 40pt+ margin on every edge
+    assert canvas.find_wrapper_duplicates([small, big]) == {}
+
+
+def test_caption_sized_margin_containment_is_still_a_wrapper():
+    # Sanity check for the same threshold from the other side: a margin
+    # comfortably within real caption-band territory must still register.
+    s = _structure("s1", _b(0, 0, 100, 100), atoms=14)
+    wrap = _structure("wrap1", _b(0, 0, 100, 120), atoms=14)  # 20pt margin
+    assert canvas.find_wrapper_duplicates([s, wrap]) == {"wrap1": "s1"}
+
+
 def test_classify_units_excludes_wrappers_and_empties():
     s = _structure("s1", _b(0, 0, 50, 50), atoms=14)
     wrap = _structure("wrap1", _b(0, 0, 50, 70), atoms=14)
@@ -64,6 +83,46 @@ def test_classify_units_excludes_wrappers_and_empties():
 
 
 # ---------- associate_captions ----------
+
+def test_caption_tag_owner_wins_over_everything_else():
+    # tier 0: tag_owner_id is the reliable mechanism for connector-created
+    # captions (Caption.Group = unit is a confirmed no-op, so group_id is
+    # always None for them) -- it must win even when a caption has drifted
+    # far enough that proximity would pick a different, nearer structure.
+    near = _structure("near", _b(0, 0, 50, 50))
+    far = _structure("far", _b(500, 500, 550, 550))
+    c = {"text": "1a, 92%", "bounds": _b(505, 555, 545, 565),
+         "group_id": None, "tag_owner_id": "far"}
+    assert canvas.associate_captions([near, far], [c]) == ["far"]
+    # same geometry without the tag: proximity wrongly can't reach "far"
+    # either (beyond CAPTION_MAX_DISTANCE_PT of "near") -- unowned, not
+    # misattributed; the tag is what fixes this case, not a happy accident
+    # of the fallback tiers.
+    c_no_tag = dict(c, tag_owner_id=None)
+    assert canvas.associate_captions([near, far], [c_no_tag]) == ["far"]
+
+
+def test_caption_tag_owner_resolves_through_wrapper_map():
+    s = _structure("s1", _b(0, 0, 50, 50))
+    c = {"text": "2b", "bounds": _b(600, 600, 630, 610),
+         "group_id": None, "tag_owner_id": "s1"}
+    # tag points at s1 directly, but s1 got wrapper-mapped away (e.g. the
+    # user separately hand-grouped it under a wrapper) -- still resolves.
+    got = canvas.associate_captions([], [c], wrapper_map={"s1": "s1"})
+    assert got == ["s1"]
+    got2 = canvas.associate_captions([s], [c])
+    assert got2 == ["s1"]
+
+
+def test_caption_tag_owner_unresolvable_falls_through_to_group():
+    # tag_owner_id points at an id not present in this call's structures or
+    # wrapper_map (e.g. a deleted structure, or a region-scoped snapshot) --
+    # must not be trusted blindly; falls through to the next tier instead.
+    s = _structure("s1", _b(0, 0, 50, 50))
+    c = {"text": "2b", "bounds": _b(300, 300, 320, 310),
+         "group_id": "s1", "tag_owner_id": "claude-deleted-unit"}
+    assert canvas.associate_captions([s], [c]) == ["s1"]
+
 
 def test_caption_grouped_to_wrapper_labels_the_wrapped_structure():
     s = _structure("s1", _b(0, 0, 50, 50))
