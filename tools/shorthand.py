@@ -6,15 +6,22 @@ silently register the tool with no description, which is exactly how
 chemdraw_contract_to_shorthand's semantics got misread once, collapsing
 whole molecules into "Ph" labels.
 """
-from chemdraw_connector.domain.substructures import SHORTHANDS
-
 from ._common import TARGET_DOC, as_json
 from .structure import _parse
 
-_AUTO = ", ".join(s.label for s in SHORTHANDS if s.auto)
-_OPT_IN = ", ".join(s.label for s in SHORTHANDS if not s.auto)
 
-_CONTRACT_GROUP_DESC = f"""Find known functional groups inside the target
+def register(mcp, bridge):
+    # Catalog pulled through bridge.available_shorthand_groups() (not by
+    # importing chemdraw_connector.domain.substructures.SHORTHANDS
+    # directly here) — every tool call funnels through bridge, per
+    # bridge/__init__.py's module docstring, and that includes this
+    # docstring-building read of the group catalog, not just the mutating
+    # calls below.
+    catalog = bridge.available_shorthand_groups()
+    auto = ", ".join(s["label"] for s in catalog if s["auto"])
+    opt_in = ", ".join(s["label"] for s in catalog if not s["auto"])
+
+    contract_group_desc = f"""Find known functional groups inside the target
 structure(s) and contract JUST those atoms into their standard shorthand
 labels, leaving the rest of the molecule drawn — e.g. collapse a drawn
 monosubstituted benzene ring into "Ph", a drawn SiEt3 into "TES", a drawn
@@ -23,8 +30,8 @@ phenyl rings / protecting groups".
 
 groups: "auto" contracts every group in the conservative default set; or a
 comma-separated list of labels (case-insensitive) to contract only those.
-Default set: {_AUTO}.
-Opt-in (matched only when named explicitly): {_OPT_IN}.
+Default set: {auto}.
+Opt-in (matched only when named explicitly): {opt_in}.
 
 Groups are matched with exactly one attachment bond, biggest first, never
 overlapping, and never a whole molecule. Rings drawn with an aromatic
@@ -35,11 +42,15 @@ can leave the REMAINING drawn portion with distorted bond angles, confirmed
 live. Its caption is NOT auto-repositioned though, since contraction (like
 any resize) can change where the caption should sit — call
 chemdraw_fix_caption_gaps afterward. A .cdxml backup of the document is
-saved first; the result includes backup_path. {TARGET_DOC}"""
+saved first; the result includes backup_path.
 
+Returns `results` (one entry per structure, each with `id`/`contracted`/
+optional `note`) and `failed` — any structure whose contraction round(s)
+raised partway through (e.g. a stale-handle failure), reported as
+`{{"id", "error", "contracted_before_failure"}}` rather than aborting the
+rest of the batch. {TARGET_DOC}"""
 
-def register(mcp, bridge):
-    @mcp.tool(description=_CONTRACT_GROUP_DESC)
+    @mcp.tool(description=contract_group_desc)
     def chemdraw_contract_group(target: str = "selection",
                                 groups: str = "auto") -> str:
         return as_json(bridge.contract_functional_groups(
@@ -55,7 +66,10 @@ def register(mcp, bridge):
         "instead. The label text is display-only and NOT validated against "
         "the structure; the real atoms stay nested inside the label and "
         "chemdraw_expand_shorthand restores them. A .cdxml backup of the "
-        "document is saved first; the result includes backup_path. "
+        "document is saved first; the result includes backup_path. Returns "
+        "`contracted` (one entry per successfully contracted structure) and "
+        "`failed` (per-structure `{\"id\", \"error\"}` for any structure "
+        "that could not be contracted — the rest of the batch still runs). "
         + TARGET_DOC))
     def chemdraw_contract_to_shorthand(target: str = "selection",
                                        label: str = "") -> str:
@@ -71,7 +85,10 @@ def register(mcp, bridge):
         "labels across a whole document, chemdraw_expand_labels is much "
         "faster (one call total instead of one per structure) and can "
         "filter by label text. A .cdxml backup of the document is saved "
-        "first; the result includes backup_path. " + TARGET_DOC))
+        "first; the result includes backup_path. Returns `expanded` (one "
+        "entry per successfully expanded structure) and `failed` (per-"
+        "structure `{\"id\", \"error\"}` for any structure that could not "
+        "be expanded — the rest of the batch still runs). " + TARGET_DOC))
     def chemdraw_expand_shorthand(target: str = "selection") -> str:
         return as_json(bridge.expand_shorthand(_parse(target)))
 
@@ -102,11 +119,4 @@ def register(mcp, bridge):
         """The catalog of functional groups chemdraw_contract_group can
         recognize: label, SMARTS pattern, description, aliases, and whether
         each is in the "auto" default set."""
-        return as_json({
-            "groups": [
-                {"label": s.label, "smarts": s.smarts,
-                 "description": s.description, "auto": s.auto,
-                 "aliases": list(s.aliases)}
-                for s in SHORTHANDS
-            ],
-        })
+        return as_json({"groups": bridge.available_shorthand_groups()})

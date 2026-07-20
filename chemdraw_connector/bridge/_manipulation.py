@@ -6,6 +6,13 @@ from ..domain import bond_split, diff
 from ..errors import InvalidInputError
 from ._plumbing import SLOW_TIMEOUT
 
+# edit_atoms/edit_bonds scale their timeout with batch size (max(SLOW_TIMEOUT,
+# 2.0 * len(edits))) so a big-but-legitimate batch gets enough runway. With no
+# upper bound on len(edits) that same scaling turns an oversized batch into a
+# multi-hour timeout instead of a clear rejection. Same cap value as
+# _enumeration.py's _MAX_SUBSTITUENTS for a similar unbounded-batch input.
+_MAX_BATCH_EDITS = 500
+
 
 class _Manipulation:
     def split_at_bond(self, target, bond_ref, side_atom_ref):
@@ -270,6 +277,13 @@ class _Manipulation:
         diff so any change beyond the requested edits surfaces as
         `unexpected_changes` instead of being discovered later, and a
         failed item goes into `failed` rather than aborting the batch."""
+        if len(edits) > _MAX_BATCH_EDITS:
+            raise InvalidInputError(
+                f"edit_atoms got {len(edits)} edits, over the "
+                f"{_MAX_BATCH_EDITS}-edit limit for one call. Split the "
+                "edits into smaller batches and retry."
+            )
+
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)
@@ -329,6 +343,13 @@ class _Manipulation:
         rationale (one COM session, one backup, before/after diff, partial
         failure reported per-item). edits: [{"target": object_id, "bond":
         ref or 1-based index, "bond_order"?: str}, ...]."""
+        if len(edits) > _MAX_BATCH_EDITS:
+            raise InvalidInputError(
+                f"edit_bonds got {len(edits)} edits, over the "
+                f"{_MAX_BATCH_EDITS}-edit limit for one call. Split the "
+                "edits into smaller batches and retry."
+            )
+
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)

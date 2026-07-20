@@ -37,8 +37,65 @@ class _Shorthand:
             untagged = [u for u in targets.iter_units(doc, cache)
                         if targets.get_id(u) is None]
             if not untagged:
+                # Nothing to retag — the mutation didn't leave an orphaned
+                # unit (or it was already tagged some other way). Report
+                # rather than let the caller index into an empty list.
                 return None, f"structure {old_id} could not be re-identified"
-            new_id = targets.ensure_id(untagged[-1])
+
+            # iter_units (targets.py) dedupes a Group's contents against the
+            # SAME structure being independently re-discovered via one of
+            # its atoms' .Fragment — but only by comparing claude_id TAGS
+            # ("the fragment inherits the group's tag, so dedupe by tag
+            # id"). That trick can't fire for a structure that is untagged
+            # at scan time, which is exactly what a just-contracted label
+            # is. Confirmed live: contracting a plain biphenyl to its
+            # formula label left doc.Groups.Count showing exactly ONE new
+            # untagged group (a single-atom label, e.g. COM .ID 68,
+            # atoms=1/bonds=0/formula="C12H10"), yet this scan reported it
+            # TWICE — once from iter_units' doc.Groups loop, once more from
+            # its doc.Atoms -> atom.Fragment loop rediscovering the exact
+            # same element. Both sightings shared the identical COM .ID,
+            # and writing a probe object tag through one wrapper read back
+            # through the "other" confirmed they are the same persisted
+            # document object, not two structures. So: collapse untagged
+            # sightings that share a `.ID` (the same doc-unique identity
+            # already trusted for Atom/Fragment elsewhere — see frag.ID in
+            # targets.iter_units, atom.ID in _build_handle_map) into one
+            # candidate before judging ambiguity. A COM id that can't even
+            # be read is never merged with anything (treated as its own
+            # unique, unresolvable candidate) rather than silently folded
+            # into some other sighting.
+            by_com_id, order = {}, []
+            for u in untagged:
+                try:
+                    com_id = u.ID
+                except Exception:
+                    com_id = object()
+                if com_id not in by_com_id:
+                    by_com_id[com_id] = u
+                    order.append(com_id)
+            candidates = [by_com_id[cid] for cid in order]
+
+            if len(candidates) > 1:
+                # The one-orphan assumption this function relies on doesn't
+                # hold here — after collapsing same-element duplicates,
+                # ChemDraw's rebuild still left more than one DISTINCT
+                # untagged unit, so there's no principled way to pick which
+                # one is the actual successor to old_id. Guessing (e.g.
+                # "newest") risks silently tagging the WRONG structure,
+                # which is worse than surfacing the ambiguity to the
+                # caller. (This is the case the dedupe above does NOT
+                # collapse away — genuinely separate untagged structures,
+                # as opposed to one structure counted twice.)
+                raise ChemDrawError(
+                    f"Mutation of structure {old_id} produced "
+                    f"{len(candidates)} untagged candidates instead of "
+                    "exactly one — the result is ambiguous and could not be "
+                    "safely re-tagged. Call chemdraw_get_document_state to "
+                    "see the current state of the document, then retry with "
+                    "a more specific target."
+                )
+            new_id = targets.ensure_id(candidates[-1])
             return new_id, f"structure was rebuilt; new id replaces {old_id}"
 
     def contract_to_shorthand(self, target="selection", label=""):
@@ -78,10 +135,19 @@ class _Shorthand:
                 entry["note"] = note
             return entry
 
-        out = [self._run(lambda u=u, uid=uid: contract_one(u, uid),
-                         timeout=SLOW_TIMEOUT)
-               for u, uid in unit_pairs]
-        return {"contracted": out, "backup_path": backup}
+        # Each unit is its own COM submission (see rationale above), so a
+        # failure on one (a ChemDrawError, a stale-handle blowup, anything)
+        # must not abort every unit queued after it — same per-item
+        # isolation edit_atoms/edit_bonds use, just at submission
+        # granularity instead of inside one shared COM session.
+        out, failed = [], []
+        for u, uid in unit_pairs:
+            try:
+                out.append(self._run(lambda u=u, uid=uid: contract_one(u, uid),
+                                     timeout=SLOW_TIMEOUT))
+            except Exception as exc:
+                failed.append({"id": uid, "error": str(exc)})
+        return {"contracted": out, "failed": failed, "backup_path": backup}
 
     def expand_shorthand(self, target="selection"):
         # One COM submission per unit (see contract_to_shorthand for why,
@@ -102,10 +168,16 @@ class _Shorthand:
                 entry["note"] = note
             return entry
 
-        out = [self._run(lambda u=u, uid=uid: expand_one(u, uid),
-                         timeout=SLOW_TIMEOUT)
-               for u, uid in unit_pairs]
-        return {"expanded": out, "backup_path": backup}
+        # Per-unit isolation — see contract_to_shorthand for why a single
+        # unit's failure must not abort the rest of the batch.
+        out, failed = [], []
+        for u, uid in unit_pairs:
+            try:
+                out.append(self._run(lambda u=u, uid=uid: expand_one(u, uid),
+                                     timeout=SLOW_TIMEOUT))
+            except Exception as exc:
+                failed.append({"id": uid, "error": str(exc)})
+        return {"expanded": out, "failed": failed, "backup_path": backup}
 
     def expand_labels(self, target="document", labels="all"):
         """Bulk-expand every contracted shorthand label across `target` in
@@ -191,8 +263,34 @@ class _Shorthand:
             }
         return self._run(go, timeout=BULK_TIMEOUT)
 
+    @staticmethod
+    def available_shorthand_groups():
+        """The catalog of functional groups contract_functional_groups can
+        recognize: label, SMARTS pattern, description, aliases, and whether
+        each is in the conservative "auto" default set. Pure lookup, no
+        COM/worker involved — but still exposed here (rather than tools/
+        importing domain.substructures directly) so every tool call funnels
+        through bridge, per bridge/__init__.py's module docstring."""
+        return [
+            {"label": s.label, "smarts": s.smarts, "description": s.description,
+             "auto": s.auto, "aliases": list(s.aliases)}
+            for s in substructures.SHORTHANDS
+        ]
+
     _MAX_CONTRACTIONS_PER_UNIT = 40  # hard stop against re-match loops
     _MAX_ROUNDS_PER_UNIT = 10  # export/match rounds; normally ~2 (1 productive + 1 empty confirm)
+    # Sanity cap on how many structures one call will run SMARTS matching
+    # against. Each unit's rounds already run as separate worker
+    # submissions with their own SLOW_TIMEOUT (not one call whose timeout
+    # scales with the batch — see edit_atoms/edit_bonds for that failure
+    # mode), so an oversized target can't wedge a single COM call; it just
+    # runs for a very long cumulative wall-clock time with no way for the
+    # caller to bound it up front. 500 matches the cap used elsewhere in
+    # this codebase for similar unbounded-batch inputs (see
+    # _enumeration.py's _MAX_SUBSTITUENTS) and is well above any real
+    # scope-table target size seen in practice (largest probed: 45
+    # structures).
+    _MAX_UNITS_PER_CALL = 500
 
     def contract_functional_groups(self, target="selection", groups="auto"):
         """Find known functional groups in each target structure and contract
@@ -230,24 +328,44 @@ class _Shorthand:
             return backup, [(u, targets.ensure_id(u)) for u in units]
         backup, unit_pairs = self._run(prep, timeout=SLOW_TIMEOUT)
 
-        results = []
+        if len(unit_pairs) > self._MAX_UNITS_PER_CALL:
+            raise ChemDrawError(
+                f"contract_functional_groups target resolved to "
+                f"{len(unit_pairs)} structures, over the "
+                f"{self._MAX_UNITS_PER_CALL}-structure limit for one call. "
+                "Split the target into smaller batches (e.g. by region or "
+                "explicit object_id list) and retry."
+            )
+
+        results, failed = [], []
         for unit, uid in unit_pairs:
             contracted, note = [], None
             current_unit, current_uid = unit, uid  # live handle valid for round 1 only
-            for _ in range(self._MAX_ROUNDS_PER_UNIT):
-                step = self._run(
-                    lambda u=current_unit, uid=current_uid:
-                        self._contract_round(u, uid, shorthands),
-                    timeout=SLOW_TIMEOUT)
-                if step.get("note"):
-                    note = step["note"]
-                contracted.extend(step.get("contracted", []))
-                if not step.get("any_contracted") or step.get("new_id") is None:
-                    current_uid = step.get("new_id", current_uid)
-                    break
-                current_uid, current_unit = step["new_id"], None  # force re-resolve next round
-                if len(contracted) >= self._MAX_CONTRACTIONS_PER_UNIT:
-                    break
+            try:
+                for _ in range(self._MAX_ROUNDS_PER_UNIT):
+                    step = self._run(
+                        lambda u=current_unit, uid=current_uid:
+                            self._contract_round(u, uid, shorthands),
+                        timeout=SLOW_TIMEOUT)
+                    if step.get("note"):
+                        note = step["note"]
+                    contracted.extend(step.get("contracted", []))
+                    if not step.get("any_contracted") or step.get("new_id") is None:
+                        current_uid = step.get("new_id", current_uid)
+                        break
+                    current_uid, current_unit = step["new_id"], None  # force re-resolve next round
+                    if len(contracted) >= self._MAX_CONTRACTIONS_PER_UNIT:
+                        break
+            except Exception as exc:
+                # A round can raise (ChemDrawError from an unrecoverable
+                # stale handle map, a COM error wrapped by _run, anything)
+                # — that must not abort every unit still queued after this
+                # one. Whatever this unit already contracted before the
+                # failure is still reported, same as edit_atoms/edit_bonds'
+                # per-item isolation.
+                failed.append({"id": uid, "error": str(exc),
+                               "contracted_before_failure": contracted})
+                continue
             if contracted and current_uid is not None:
                 # Collapsing atoms into a shorthand label can leave the
                 # REMAINING drawn portion with distorted bond angles
@@ -283,7 +401,7 @@ class _Shorthand:
             elif note:
                 entry["note"] = note
             results.append(entry)
-        return {"results": results, "backup_path": backup}
+        return {"results": results, "failed": failed, "backup_path": backup}
 
     def _clean_unit(self, uid):
         """Whole-unit Clean Up Structure by id. Worker thread only."""
@@ -433,6 +551,18 @@ class _Shorthand:
         # An aromatic ring drawn with a circle keeps that circle as a separate
         # doc.Graphics object; contraction would orphan it as a floating
         # circle. Take along any graphic fully inside the matched atoms' box.
+        # KNOWN LIMITATION: this is a full-containment test (the graphic's
+        # entire bounding box, not just its center, must fit inside the
+        # padded box) rather than a mere-overlap test, which is already the
+        # tighter of the two — but in a very densely packed scope table an
+        # unrelated small graphic sitting fully within 2pt of this match's
+        # atoms could still be swept in. Not tightened further: SMARTS
+        # patterns here require a monosubstituted ring (exactly one
+        # boundary bond, see substructures._boundary_bonds), so a fused or
+        # adjacent ring's circle can never itself be part of the match, and
+        # a false-positive sweep needs an unrelated free-floating graphic
+        # placed unusually close to a match — judged low-probability enough
+        # not to warrant a more expensive per-graphic-ownership check here.
         pad = 2.0
         left, top = min(xs) - pad, min(ys) - pad
         right, bottom = max(xs) + pad, max(ys) + pad
