@@ -138,3 +138,197 @@ def mime_for(fmt):
         raise ValueError(
             f"Unknown format {fmt!r}; expected one of {sorted(FORMAT_MIME)}"
         ) from None
+
+
+# CDArrowHeadType (kCDArrowHeadType...) -- confirmed LIVE 2026-07-21 that
+# this, not CDArrowType, is what IChemDrawArrow.ArrowHeadType actually takes:
+# it's the arrowhead's FILL style (solid triangle / hollow outline / bare
+# angle mark), not a head-count or mechanism-class bitmask as the raw
+# CDArrowType enum's names (NoHead/HalfHead/FullHead/Resonance/Equilibrium/
+# Hollow/RetroSynthetic) would suggest if applied here — that assumption was
+# tested live and found wrong before any bridge code was written around it.
+ARROW_HEAD_TYPE_NAMES = {0: "unspecified", 1: "solid", 2: "hollow", 3: "angle"}
+ARROW_HEAD_TYPE_VALUES = {v: k for k, v in ARROW_HEAD_TYPE_NAMES.items()}
+
+# CDArrowHeadPositionType (kCDArrowHeadPosition...) -- confirmed LIVE
+# 2026-07-21 as the real per-end head control on IChemDrawArrow
+# (ArrowHeadPositionStart/ArrowHeadPositionTail): "none" (no head at that
+# end), "full" (both barbs, the normal filled/hollow triangle), and
+# "half_left"/"half_right" (single-barb -- verified live via a large
+# HeadSize/HeadWidth + 600 DPI screenshot to render a genuine asymmetric
+# "fishhook" shape, the classic single-electron mechanism-arrow head).
+ARROW_HEAD_POSITION_NAMES = {0: "unspecified", 1: "none", 2: "full",
+                              3: "half_left", 4: "half_right"}
+ARROW_HEAD_POSITION_VALUES = {v: k for k, v in ARROW_HEAD_POSITION_NAMES.items()}
+
+# CDNoGoType (kCDNoGoType...) -- a crossed-out/hashed "this reaction pathway
+# does not occur" arrow marker, found live on IChemDrawArrow alongside the
+# head-position properties above (not in the original session's typelib
+# scan target list).
+NO_GO_TYPE_NAMES = {0: "unspecified", 1: "none", 2: "cross", 3: "hash"}
+NO_GO_TYPE_VALUES = {v: k for k, v in NO_GO_TYPE_NAMES.items()}
+
+# CDSymbolType (kCDSymbolType...). Types 10-12 (racemic/absolute/relative)
+# render as clear boxed stereo-descriptor labels ("Rac"/"Abs"/"Rel",
+# confirmed live via screenshot). Types 0-9 render at a tiny, apparently
+# unscalable default size (confirmed live: bounds as small as ~0.13pt for
+# the electron-dot type, with no settable size property found) -- exposed
+# here regardless since the enum itself is simple vocabulary, but
+# chemdraw_make_symbol's docstring should steer callers toward 10-12 until
+# a sizing mechanism for the rest is found.
+SYMBOL_TYPE_NAMES = {0: "lone_pair", 1: "electron", 2: "radical_cation",
+                      3: "radical_anion", 4: "circle_plus", 5: "circle_minus",
+                      6: "dagger", 7: "double_dagger", 8: "plus", 9: "minus",
+                      10: "racemic", 11: "absolute", 12: "relative"}
+SYMBOL_TYPE_VALUES = {v: k for k, v in SYMBOL_TYPE_NAMES.items()}
+
+# CDEnhancedStereoType (kCDEnhancedStereo...) -- the "and1"/"or1" relative-
+# stereo grouping notation. Found live directly on IChemDrawAtom
+# (EnhancedStereoType + EnhancedStereoGroupNumber), confirmed settable.
+ENHANCED_STEREO_TYPE_NAMES = {0: "unspecified", 1: "none", 2: "absolute",
+                               3: "or", 4: "and"}
+ENHANCED_STEREO_TYPE_VALUES = {v: k for k, v in ENHANCED_STEREO_TYPE_NAMES.items()}
+
+# CDBracketType (kCDBracketType...) -- the bracket glyph's line style.
+# Confirmed live via screenshot: square is a straight line with right-angle
+# hook end-caps, curly renders as an actual curly-brace curve with a small
+# center bulge, round renders as a big parenthesis-like arc.
+BRACKET_TYPE_NAMES = {0: "square", 1: "curly", 2: "round"}
+BRACKET_TYPE_VALUES = {v: k for k, v in BRACKET_TYPE_NAMES.items()}
+
+# CDBracketUsage (kCDBracketUsage...) -- what a bracket represents
+# semantically. Confirmed live: this also drives an automatic abbreviation
+# label rendered next to the bracket (sru -> "n", monomer -> "mon",
+# crosslink -> "xl", unspecified -> no label at all) -- ChemDraw generates
+# this text itself; see make_bracket's docstring for why it can't be
+# overridden via SRULabel/RepeatCount.
+BRACKET_USAGE_NAMES = {
+    0: "unspecified", 1: "unused1", 2: "unused2", 3: "sru", 4: "monomer",
+    5: "mer", 6: "copolymer", 7: "copolymer_alternating",
+    8: "copolymer_random", 9: "copolymer_block", 10: "crosslink",
+    11: "graft", 12: "modification", 13: "component",
+    14: "mixture_unordered", 15: "mixture_ordered", 16: "multiple_group",
+    17: "generic", 18: "anypolymer",
+}
+BRACKET_USAGE_VALUES = {v: k for k, v in BRACKET_USAGE_NAMES.items()}
+
+# CDPolymerRepeatPattern (kCDPolymerRepeatPattern...) -- confirmed settable
+# live (get/put round-trip on a fresh bracket), but this session did not
+# confirm a distinguishable visual effect for any of its 3 values -- expose
+# it since it's harmless to set, but don't assume it does anything visible
+# yet (see make_bracket's docstring).
+POLYMER_REPEAT_PATTERN_NAMES = {0: "head_to_tail", 1: "head_to_head",
+                                 2: "either_unknown"}
+POLYMER_REPEAT_PATTERN_VALUES = {v: k for k, v in POLYMER_REPEAT_PATTERN_NAMES.items()}
+
+
+def bracket_type_name(value):
+    return BRACKET_TYPE_NAMES.get(int(value), f"unknown({value})")
+
+
+def bracket_type_value(name):
+    try:
+        return BRACKET_TYPE_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown bracket type {name!r}; expected one of "
+            f"{sorted(BRACKET_TYPE_VALUES)}"
+        ) from None
+
+
+def bracket_usage_name(value):
+    return BRACKET_USAGE_NAMES.get(int(value), f"unknown({value})")
+
+
+def bracket_usage_value(name):
+    try:
+        return BRACKET_USAGE_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown bracket usage {name!r}; expected one of "
+            f"{sorted(BRACKET_USAGE_VALUES)}"
+        ) from None
+
+
+def polymer_repeat_pattern_name(value):
+    return POLYMER_REPEAT_PATTERN_NAMES.get(int(value), f"unknown({value})")
+
+
+def polymer_repeat_pattern_value(name):
+    try:
+        return POLYMER_REPEAT_PATTERN_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown polymer repeat pattern {name!r}; expected one of "
+            f"{sorted(POLYMER_REPEAT_PATTERN_VALUES)}"
+        ) from None
+
+
+def arrow_head_type_name(value):
+    return ARROW_HEAD_TYPE_NAMES.get(int(value), f"unknown({value})")
+
+
+def arrow_head_type_value(name):
+    try:
+        return ARROW_HEAD_TYPE_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown arrow head type {name!r}; expected one of "
+            f"{sorted(ARROW_HEAD_TYPE_VALUES)}"
+        ) from None
+
+
+def arrow_head_position_name(value):
+    return ARROW_HEAD_POSITION_NAMES.get(int(value), f"unknown({value})")
+
+
+def arrow_head_position_value(name):
+    try:
+        return ARROW_HEAD_POSITION_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown arrow head position {name!r}; expected one of "
+            f"{sorted(ARROW_HEAD_POSITION_VALUES)}"
+        ) from None
+
+
+def no_go_type_name(value):
+    return NO_GO_TYPE_NAMES.get(int(value), f"unknown({value})")
+
+
+def no_go_type_value(name):
+    try:
+        return NO_GO_TYPE_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown no-go type {name!r}; expected one of "
+            f"{sorted(NO_GO_TYPE_VALUES)}"
+        ) from None
+
+
+def symbol_type_name(value):
+    return SYMBOL_TYPE_NAMES.get(int(value), f"unknown({value})")
+
+
+def symbol_type_value(name):
+    try:
+        return SYMBOL_TYPE_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown symbol type {name!r}; expected one of "
+            f"{sorted(SYMBOL_TYPE_VALUES)}"
+        ) from None
+
+
+def enhanced_stereo_type_name(value):
+    return ENHANCED_STEREO_TYPE_NAMES.get(int(value), f"unknown({value})")
+
+
+def enhanced_stereo_type_value(name):
+    try:
+        return ENHANCED_STEREO_TYPE_VALUES[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown enhanced stereo type {name!r}; expected one of "
+            f"{sorted(ENHANCED_STEREO_TYPE_VALUES)}"
+        ) from None

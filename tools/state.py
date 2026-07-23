@@ -8,16 +8,22 @@ def register(mcp, bridge):
         """Full structured snapshot of every real structure (molecule)
         currently on the page — id, formula, counts, bounds, position, and
         any caption text(s) labeling it — plus overlapping pairs (among real
-        structures only) and ChemDraw's chemical-warning count. Caption-
-        wrapper duplicate groups and empty decoration groups (box frames,
-        standalone captions) are excluded from `structures` and listed
-        separately under `non_structure_units`. This is the source of truth
-        for canvas state; call it before manipulating anything you didn't
-        just create, since the user may have edited by hand. On a large
-        page this can exceed the inline result size limit — prefer
-        chemdraw_status for counts, or chemdraw_describe_canvas with
-        region_json to scope to one panel, or chemdraw_export_canvas_table
-        for a full-page export you page through as a file."""
+        structures only), `off_page` (structure ids whose bounds fall
+        outside the document's actual page — see `page_bounds` — and which
+        edge(s) they cross), and ChemDraw's chemical-warning count. ALWAYS
+        check `off_page`: a structure can render cleanly in every preview
+        image (which auto-crops to whatever was drawn, page edges or not)
+        while sitting partly or entirely off the real page — this is the
+        only place that gets caught. Caption-wrapper duplicate groups and
+        empty decoration groups (box frames, standalone captions) are
+        excluded from `structures` and listed separately under
+        `non_structure_units`. This is the source of truth for canvas
+        state; call it before manipulating anything you didn't just create,
+        since the user may have edited by hand. On a large page this can
+        exceed the inline result size limit — prefer chemdraw_status for
+        counts, or chemdraw_describe_canvas with region_json to scope to
+        one panel, or chemdraw_export_canvas_table for a full-page export
+        you page through as a file."""
         return as_json(bridge.get_document_state())
 
     @mcp.tool()
@@ -28,7 +34,7 @@ def register(mcp, bridge):
         return as_json(bridge.diff_since_last_check())
 
     @mcp.tool()
-    def chemdraw_export_canvas_table(path: str = "") -> str:
+    def chemdraw_export_canvas_table(path: str = "", overwrite: bool = False) -> str:
         """Write the FULL classified canvas inventory (every real
         structure, caption, panel box, and excluded wrapper/decoration
         unit — everything chemdraw_describe_canvas computes) to one CSV
@@ -45,5 +51,7 @@ def register(mcp, bridge):
         region-scoped chemdraw_describe_canvas (one panel's worth of
         detail) — both are far cheaper than a full export. path: optional;
         omit to reuse the default export location (overwritten each call,
-        like the scratch document)."""
-        return as_json(bridge.export_canvas_table(path or None))
+        like the scratch document — that default is always overwritable).
+        overwrite: required to overwrite an existing file at an explicit
+        custom path; ignored when path is omitted."""
+        return as_json(bridge.export_canvas_table(path or None, overwrite=overwrite))

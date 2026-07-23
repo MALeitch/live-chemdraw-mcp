@@ -496,9 +496,189 @@ def main():
 
     print("== reaction scheme (cleared scratch) ==")
     check("clear scratch", b.use_scratch_document)
-    check("reaction scheme", lambda: b.make_reaction_scheme(
+    rxn = check("reaction scheme", lambda: b.make_reaction_scheme(
         ["CC(=O)Cl", "Oc1ccccc1"], ["CC(=O)Oc1ccccc1"],
         reagents_text="Et3N, DCM, 0 °C"))
+    rxn_arrow_id = (rxn or {}).get("arrow_object_id")
+    if rxn_arrow_id:
+        check("restyle the reaction scheme's own arrow",
+              lambda: b.set_arrow_style(rxn_arrow_id, tail_head="full"))
+
+    print("== annotations: arrows/symbols/isotopes (cleared scratch) ==")
+    check("clear scratch", b.use_scratch_document)
+    eth = check("insert ethanol", lambda: b.insert_structure("CCO"))
+    eth_id = eth["inserted"][0]["id"] if eth else None
+    atoms = check("list atoms for anchoring", lambda: b.list_atoms_bonds(eth_id))
+    carbon_ref = None
+    if atoms:
+        for a in atoms["structures"][0]["atoms"]:
+            if a["element"] == "C":
+                carbon_ref = a["ref"]
+                break
+
+    # Plain arrow between two raw points (no target/atom anchoring needed).
+    arr = check("make_arrow (raw points, defaults)", lambda: b.make_arrow(
+        "", {"x": 300.0, "y": 60.0}, {"x": 150.0, "y": 60.0}))
+    arr_id = arr["object_id"] if arr else None
+    if arr:
+        assert arr["start_head"] == "full" and arr["tail_head"] == "none", arr
+
+    # Fishhook single-electron arrow, anchored to an atom in the structure.
+    if carbon_ref:
+        check("make_arrow fishhook anchored to atom", lambda: b.make_arrow(
+            eth_id, carbon_ref, {"x": 200.0, "y": 120.0},
+            start_head="half_left"))
+
+    if arr_id:
+        restyled = check("set_arrow_style -> hollow + no_go cross",
+                         lambda: b.set_arrow_style(arr_id, head_type="hollow", no_go="cross"))
+        if restyled:
+            assert restyled["head_type"] == "hollow" and restyled["no_go"] == "cross", restyled
+        check("list_arrows finds it", lambda: b.list_arrows())
+
+    # Symbol: a "rel" stereo-descriptor label, confirmed live to render
+    # cleanly (unlike the tiny lone-pair/radical/dagger/etc. types).
+    if carbon_ref:
+        sym = check("make_symbol relative-stereo label", lambda: b.make_symbol(
+            eth_id, "relative", carbon_ref, offset_y=-20.0))
+        if sym:
+            assert sym["symbol_type"] == "relative", sym
+        check("list_symbols finds it", lambda: b.list_symbols())
+
+    # Isotope labeling: set, confirm export fidelity, then clear.
+    if carbon_ref:
+        edited = check("edit_atom isotope=13", lambda: b.edit_atom(
+            eth_id, carbon_ref, isotope=13))
+        if edited:
+            assert edited["isotope"] == 13, edited
+        exported = check("export SMILES shows isotope", lambda: b.export_structure(
+            "smiles", eth_id))
+        if exported:
+            assert "13" in exported["structures"][0]["data"], exported
+        # KNOWN LIMITATION, confirmed live: setting isotope=0 from a
+        # nonzero value is silently rejected by ChemDraw's COM layer (not
+        # isotope-specific -- Charge=0 from nonzero has the identical
+        # failure mode, confirmed live; see _apply_atom_edit's comment).
+        # No assertion here on purpose -- this deliberately just observes
+        # and reports the real value via `check`'s own printed output
+        # rather than asserting a reset that isn't reliably achievable.
+        check("edit_atom isotope=0 (reset -- may not take effect, see "
+              "_apply_atom_edit)", lambda: b.edit_atom(eth_id, carbon_ref, isotope=0))
+
+        # Enhanced stereo ("and1"/"or1" relative-stereo grouping).
+        enh = check("set_enhanced_stereo or1", lambda: b.set_enhanced_stereo(
+            eth_id, carbon_ref, "or", group_number=1))
+        if enh:
+            assert enh["enhanced_type"] == "or" and enh["group_number"] == 1, enh
+
+    print("== specialty objects: polymer brackets (cleared scratch) ==")
+    check("clear scratch", b.use_scratch_document)
+    butane = check("insert butane", lambda: b.insert_structure("CCCC"))
+    butane_id = butane["inserted"][0]["id"] if butane else None
+    baseline_status = check("status before brackets", b.status)
+
+    if butane_id:
+        br = check("make_bracket wrapping butane (square/sru)", lambda: b.make_bracket(
+            butane_id, bracket_type="square", bracket_usage="sru"))
+        if br:
+            assert br["bracket_type"] == "square" and br["bracket_usage"] == "sru", br
+            assert br["opening_object_id"] and br["closing_object_id"], br
+
+        check("list_brackets finds the pair", lambda: b.list_brackets())
+
+        if br:
+            restyled = check("set_bracket_style closing -> curly/monomer",
+                             lambda: b.set_bracket_style(
+                                 br["closing_object_id"], bracket_type="curly",
+                                 bracket_usage="monomer"))
+            if restyled:
+                assert (restyled["bracket_type"] == "curly"
+                        and restyled["bracket_usage"] == "monomer"), restyled
+
+        # Brackets live in doc.Brackets, a separate collection from
+        # doc.Groups -- confirm they never inflate the structure count
+        # (see _specialty_objects.py's module docstring).
+        after_status = check("status after brackets (structure count unaffected)",
+                             b.status)
+        if baseline_status and after_status:
+            assert (after_status["structures_on_page"]
+                    == baseline_status["structures_on_page"]), (
+                baseline_status, after_status)
+
+        check("export image with brackets visible", lambda: b.export_image(
+            target="document"))
+
+    # Explicit-rectangle placement (no target structure), round/crosslink --
+    # exercises the manual left/top/right/bottom path.
+    check("make_bracket explicit rect (round/crosslink)", lambda: b.make_bracket(
+        "", bracket_type="round", bracket_usage="crosslink",
+        left=100.0, top=400.0, right=200.0, bottom=500.0, margin=0.0))
+
+    print("== specialty objects: TLC plates (cleared scratch) ==")
+    check("clear scratch", b.use_scratch_document)
+    plate_status_before = check("status before TLC plate", b.status)
+
+    lanes_spec = [
+        [{"rf": 0.2, "show_rf": True}, {"rf": 0.8}],
+        [{"rf": 0.5, "tail": True}],
+        [{"rf": 0.35, "filled": False, "bold": True, "dashed": True},
+         {"rf": 0.9}],
+    ]
+    plate = check("make_tlc_plate 3 lanes / 5 spots total",
+                  lambda: b.make_tlc_plate(
+                      50.0, 50.0, 350.0, 450.0, lanes_spec))
+    if plate:
+        assert plate["lane_count"] == 3, plate
+        # Confirms the two live-found COM bugs (silent AddSpot no-op past
+        # 2 spots/lane, and the create-then-style-all-in-one-final-pass
+        # workaround for the sibling-creation Rf/style reset) both landed
+        # correctly -- every lane's spot_count/rf_values must match what
+        # was requested, not silently fall short.
+        got_counts = [lane["spot_count"] for lane in plate["lanes"]]
+        assert got_counts == [2, 1, 2], (got_counts, plate)
+        got_rfs = [lane["rf_values"] for lane in plate["lanes"]]
+        expected_rfs = [[0.2, 0.8], [0.5], [0.35, 0.9]]
+        for got, expected in zip(got_rfs, expected_rfs):
+            for g, e in zip(got, expected):
+                assert abs(g - e) < 1e-3, (got_rfs, expected_rfs)
+        assert plate["object_id"], plate
+
+    # A lane with 3 spots must be rejected up front (the hard 2-spot cap),
+    # never silently truncated -- ChemDraw itself gives no error signal at
+    # all for the dropped 3rd spot, so this validation has to happen on
+    # the connector side, before any COM calls.
+    try:
+        bad_plate = b.make_tlc_plate(50.0, 500.0, 350.0, 600.0,
+                                     [[{"rf": 0.1}, {"rf": 0.5}, {"rf": 0.9}]])
+        FAIL += 1
+        print(f"FAIL  make_tlc_plate should reject a 3rd spot per lane, "
+              f"got {bad_plate}")
+    except Exception as exc:
+        PASS += 1
+        print(f"  ok  make_tlc_plate correctly rejected a 3rd spot per "
+              f"lane: {exc}")
+
+    if plate:
+        # doc.TLCPlates is a separate collection from doc.Groups -- confirm
+        # a TLC plate never inflates the structure count (same contract as
+        # brackets/arrows/symbols).
+        plate_status_after = check("status after TLC plate (structure "
+                                   "count unaffected)", b.status)
+        if plate_status_before and plate_status_after:
+            assert (plate_status_after["structures_on_page"]
+                    == plate_status_before["structures_on_page"]), (
+                plate_status_before, plate_status_after)
+
+        check("list_tlc_plates finds it", lambda: b.list_tlc_plates())
+
+        restyled = check("set_tlc_plate_style show_side_ticks=True",
+                         lambda: b.set_tlc_plate_style(
+                             plate["object_id"], show_side_ticks=True))
+        if restyled:
+            assert restyled["show_side_ticks"] is True, restyled
+
+        check("export image with TLC plate visible", lambda: b.export_image(
+            target="document"))
 
     print("== enumeration + csv (no canvas) ==")
     en = check("enumerate 5 derivatives", lambda: b.enumerate_derivatives(

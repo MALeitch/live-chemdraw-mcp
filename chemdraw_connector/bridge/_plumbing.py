@@ -3,6 +3,8 @@ submission wrapper, document resolution, per-document caching, backup
 debouncing, and RDKit pre-validation. Every other mixin's methods call
 straight into `self._run`/`self._doc`/`self._cache_for`/`self._maybe_snapshot`
 via the composed ChemDrawBridge instance."""
+import os
+
 import pythoncom
 import pywintypes
 
@@ -169,6 +171,29 @@ class _Plumbing:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _guard_write_path(path, overwrite):
+        """Validate a generic file-write target (export_image, CSV table
+        exports) before writing — same "an LLM-constructed path shouldn't
+        silently destroy data" motivation as
+        _DocumentSession._guard_save_path, without that method's "same
+        file as the currently open document" exemption: there's no
+        equivalent legitimate case for an image/CSV export, every target
+        path here is a distinct output file, not the document itself."""
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            raise InvalidInputError(
+                f"Cannot write to {path!r}: the containing directory "
+                f"{parent!r} does not exist. Create it first or choose a "
+                "different path."
+            )
+        if os.path.exists(path) and not overwrite:
+            raise InvalidInputError(
+                f"{path!r} already exists. Refusing to silently overwrite "
+                "it — pass overwrite=True if that's really intended, or "
+                "choose a different path."
+            )
 
     def _validate_input(self, representation, fmt):
         """RDKit pre-validation for formats it can parse; Kekulized output

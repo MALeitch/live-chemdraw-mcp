@@ -4,7 +4,7 @@ tools."""
 import os
 
 from .. import snapshots, state, targets
-from ..domain import canvas, diff, layout_math, numbering
+from ..domain import canvas, diff, layout_math, mojibake, numbering
 from ..errors import InvalidInputError
 from ._plumbing import SLOW_TIMEOUT
 
@@ -56,30 +56,91 @@ class _Layout:
             pass
         return cap
 
+    def _content_bottom(self, doc, cache, exclude_ids=None):
+        """Bottom-most Y among everything already on the page (structures,
+        captions, box/graphic frames) except `exclude_ids` -- None if
+        nothing qualifying is on the page.
+
+        Used to anchor a NEW grid layout below whatever's already there
+        instead of always starting at a fixed page offset near the top
+        (grid_positions' own start_y=36.0 default) -- confirmed live as
+        the reason a scope table built after a reaction scheme always
+        collided with it: both landed near the same fixed y regardless of
+        what else was on the page."""
+        exclude_ids = exclude_ids or set()
+        bottoms = []
+        for u in targets.iter_units(doc, cache):
+            try:
+                if targets.get_id(u) in exclude_ids:
+                    continue
+                bottoms.append(u.Bottom)
+            except Exception:
+                continue
+        for i in range(1, doc.Captions.Count + 1):
+            try:
+                bottoms.append(doc.Captions.Item(i).Bottom)
+            except Exception:
+                continue
+        for i in range(1, doc.Graphics.Count + 1):
+            try:
+                bottoms.append(doc.Graphics.Item(i).Bottom)
+            except Exception:
+                continue
+        return max(bottoms) if bottoms else None
+
     def arrange_grid(self, items, columns=None, layout="double-column",
                      page_width_in=None):
         """items: list of {object_id, label?}."""
         def go():
             doc = self._doc()
+            cache = self._cache_for(doc)
             backup = self._maybe_snapshot(doc)
-            units = [targets.find_by_id(doc, it["object_id"], self._cache_for(doc)) for it in items]
+            units = [targets.find_by_id(doc, it["object_id"], cache) for it in items]
+            # Anchor below whatever's already on the page OTHER than the
+            # items being arranged themselves (their current position
+            # obviously shouldn't count as "existing content to avoid").
+            exclude = {targets.ensure_id(u) for u in units}
+            content_bottom = self._content_bottom(doc, cache, exclude)
+            start_y = 36.0 if content_bottom is None else content_bottom + 24.0
             boxes = [
                 layout_math.Box(u.Left, u.Top, u.Right, u.Bottom) for u in units
             ]
             page_w = layout_math.page_width_points(layout, page_width_in)
             positions, cols = layout_math.grid_positions(
-                boxes, columns=columns, page_width=page_w)
+                boxes, columns=columns, page_width=page_w, start_y=start_y)
+            placed_boxes, placed_ids = [], []
             for unit, box, (tx, ty), it in zip(units, boxes, positions, items):
                 objs = targets.unit_objects(unit)
                 objs.Move(tx - box.left, ty - box.top)
+                placed_boxes.append(layout_math.Box(
+                    tx, ty, tx + box.width, ty + box.height))
+                placed_ids.append(it["object_id"])
                 label = it.get("label")
                 if label:
                     cx, cy = layout_math.caption_anchor(tx, ty, box)
-                    self._add_caption_to_unit(doc, unit, label, cx, cy)
+                    cap = self._add_caption_to_unit(doc, unit, label, cx, cy)
+                    try:
+                        placed_boxes.append(layout_math.Box(
+                            cap.Left, cap.Top, cap.Right, cap.Bottom))
+                        placed_ids.append(f"{it['object_id']} (caption)")
+                    except Exception:
+                        pass
+            # page_w above is the manuscript column width (single/double-
+            # column) used only to WRAP columns -- a separate concept from
+            # the actual ChemDraw document/page size (doc.Width/doc.Height),
+            # which rows keep stacking past unchecked (grid_positions has no
+            # concept of vertical page limits). Check the real page here --
+            # captions too, not just structures: they sit below their
+            # structure's bottom edge, so a structure that's on-page can
+            # still have its caption run past the real page edge.
+            off_page = layout_math.page_overflow(
+                placed_boxes, placed_ids,
+                float(doc.Width or 540.0), float(doc.Height or 720.0))
             return {
                 "arranged": [it["object_id"] for it in items],
                 "columns": cols,
                 "page_width_points": page_w,
+                "violations": {"off_page": off_page},
                 "backup_path": backup,
                 "preview_png_base64": self._preview_png(doc),
             }
@@ -97,31 +158,90 @@ class _Layout:
 
         def go():
             doc = self._doc()
+            cache = self._cache_for(doc)
             backup = self._maybe_snapshot(doc)
+            # Captured BEFORE inserting the new entries, so the new
+            # structures don't count as "existing content" to anchor
+            # below (that would just chase itself downward) -- see
+            # _content_bottom. This is what fixes a scope table always
+            # colliding with a reaction scheme (or anything else) already
+            # on the page: previously the grid always started at a fixed
+            # y near the page top regardless of what was already there.
+            content_bottom = self._content_bottom(doc, cache)
+            # Each entry keeps its own units GROUPED, not flattened one
+            # unit per grid cell -- a multi-fragment payload (a salt, a
+            # name-resolved organometallic like PdCl2(PPh3)2) returns more
+            # than one real ChemDraw Group (see _drop_wrapper_groups), and
+            # the old flattened loop below treated each fragment as its
+            # own independent table entry: one requested reagent could
+            # fragment across several grid cells, each carrying its own
+            # duplicate copy of the same label. Confirmed live as the
+            # "kept fragmenting into separate ions/ligands" symptom.
             inserted = []
             for rep, fmt, label in validated:
                 units = self._insert_structure_units(doc, rep, fmt)
-                for u in units:
-                    inserted.append((u, label))
+                inserted.append((units, label))
             boxes = [
-                layout_math.Box(u.Left, u.Top, u.Right, u.Bottom)
-                for u, _ in inserted
+                layout_math.Box(
+                    min(u.Left for u in units), min(u.Top for u in units),
+                    max(u.Right for u in units), max(u.Bottom for u in units))
+                for units, _ in inserted
             ]
             page_w = layout_math.page_width_points(layout, page_width_in)
+            start_y = 36.0 if content_bottom is None else content_bottom + 24.0
             positions, cols = layout_math.grid_positions(
-                boxes, columns=columns, page_width=page_w)
-            ids = []
-            for (unit, label), box, (tx, ty) in zip(inserted, boxes, positions):
-                objs = targets.unit_objects(unit)
-                objs.Move(tx - box.left, ty - box.top)
-                ids.append(targets.ensure_id(unit))
+                boxes, columns=columns, page_width=page_w, start_y=start_y)
+            ids, fragment_ids = [], []
+            placed_boxes, placed_ids = [], []
+            for (units, label), box, (tx, ty) in zip(inserted, boxes, positions):
+                # ONE shared delta for every fragment in this entry, so
+                # ChemDraw's own relative placement between them (e.g. an
+                # ion pair's spacing) survives intact instead of each
+                # fragment being independently snapped to the cell's
+                # top-left corner.
+                dx, dy = tx - box.left, ty - box.top
+                for u in units:
+                    targets.unit_objects(u).Move(dx, dy)
+                oids = [targets.ensure_id(u) for u in units]
+                oid = oids[0]
+                # object_ids stays a flat list of one (the entry's primary
+                # fragment, the same one the caption below is tagged to)
+                # id per entry, same shape as before this fix -- the full
+                # per-entry breakdown (>1 item only for a multi-fragment
+                # entry) is in the parallel fragment_ids instead, so a
+                # caller that doesn't care about salts/complexes never has
+                # to handle object_ids elements being sometimes a string
+                # and sometimes a list.
+                ids.append(oid)
+                fragment_ids.append(oids)
+                placed_boxes.append(layout_math.Box(
+                    tx, ty, tx + box.width, ty + box.height))
+                placed_ids.append(oid)
                 if label:
                     cx, cy = layout_math.caption_anchor(tx, ty, box)
-                    self._add_caption_to_unit(doc, unit, label, cx, cy)
+                    # One caption per ENTRY, tagged to the entry's first
+                    # fragment -- not one per fragment (the old flattened
+                    # loop created a duplicate caption with the same label
+                    # text for every ion/ligand in a multi-fragment entry).
+                    cap = self._add_caption_to_unit(doc, units[0], label, cx, cy)
+                    try:
+                        placed_boxes.append(layout_math.Box(
+                            cap.Left, cap.Top, cap.Right, cap.Bottom))
+                        placed_ids.append(f"{oid} (caption)")
+                    except Exception:
+                        pass
+            # see arrange_grid: page_w is the manuscript column width, not
+            # the actual document page -- check the real page here too,
+            # captions included (see arrange_grid).
+            off_page = layout_math.page_overflow(
+                placed_boxes, placed_ids,
+                float(doc.Width or 540.0), float(doc.Height or 720.0))
             return {
                 "object_ids": ids,
+                "fragment_ids": fragment_ids,
                 "columns": cols,
                 "page_width_points": page_w,
+                "violations": {"off_page": off_page},
                 "backup_path": backup,
                 "preview_png_base64": self._preview_png(doc),
             }
@@ -182,7 +302,19 @@ class _Layout:
             except Exception:
                 tag_owner_id = None
             entries.append({
-                "text": c.Text or "",
+                # Every caption gets its own addressable claude_id here —
+                # not just the structure it labels (tag_owner_id, a
+                # DIFFERENT unit's id) — the same "tag it the first time
+                # it's observed" treatment iter_units already gives every
+                # structure, hand-drawn or not. Without this, an orphaned
+                # caption (its owning structure deleted, or one left in
+                # the wrong place) had no id space it could be addressed
+                # through at all — chemdraw_remove could not target it,
+                # matching the "no way to select/delete it" gap; now
+                # `id` here is exactly what chemdraw_remove accepts (see
+                # targets.find_removable_by_id).
+                "id": targets.ensure_id(c),
+                "text": mojibake.fix_mojibake(c.Text or ""),
                 "bounds": {"left": round(c.Left, 1), "top": round(c.Top, 1),
                           "right": round(c.Right, 1), "bottom": round(c.Bottom, 1)},
                 "group_id": group_id,
@@ -257,7 +389,10 @@ class _Layout:
                     rect = canvas.resolve_region(region, boxes)
                 except ValueError as exc:
                     raise InvalidInputError(str(exc)) from exc
-            out = canvas.build_canvas(units, cap_entries, boxes, region=rect)
+            out = canvas.build_canvas(
+                units, cap_entries, boxes, region=rect,
+                page_width=float(doc.Width or 540.0),
+                page_height=float(doc.Height or 720.0))
             if rect is not None:
                 out["region"] = rect
             return out
@@ -265,7 +400,7 @@ class _Layout:
 
     DEFAULT_CANVAS_EXPORT_NAME = "chemdraw-mcp-canvas-export.csv"
 
-    def export_canvas_table(self, path=None, fmt="csv"):
+    def export_canvas_table(self, path=None, fmt="csv", overwrite=False):
         """Write the full classified canvas inventory (every real
         structure, caption, panel box, and excluded wrapper/decoration
         unit — everything describe_canvas computes) to one CSV file
@@ -274,7 +409,9 @@ class _Layout:
         has no such ceiling since the caller pages through the file
         instead. path: defaults to one well-known, overwritten-each-call
         location (same convention as the scratch document) so exports
-        don't accumulate."""
+        don't accumulate — that default path is always exempt from the
+        overwrite guard (it's designed to be replaced every call);
+        `overwrite` only gates an explicit custom `path`."""
         if fmt != "csv":
             raise InvalidInputError("Only csv is supported")
 
@@ -288,7 +425,8 @@ class _Layout:
             out_path = path or os.path.join(
                 os.path.dirname(snapshots.BACKUP_DIR),
                 self.DEFAULT_CANVAS_EXPORT_NAME)
-            abspath = self._write_csv_rows(rows, out_path)
+            abspath = self._write_csv_rows(
+                rows, out_path, overwrite=(overwrite or path is None))
             counts = {"structures": len(built["structures"]),
                       "captions": len(built["captions"]),
                       "boxes": len(built["boxes"]),
@@ -506,7 +644,18 @@ class _Layout:
         to find the right owner — bypasses association, matches by exact
         caption text instead. Confirmed live this matters: association
         picked the nearest structure to each caption's STALE position,
-        which was wrong once structures had moved elsewhere."""
+        which was wrong once structures had moved elsewhere.
+
+        Multiple structures sharing the identical caption text is common
+        in this codebase's own workflow (contract_to_shorthand/
+        contract_functional_groups default-label many structures the same
+        way, e.g. "Ph") — each distinct caption object with a given text
+        is handed out to at most ONE `pairs` entry (in the order given),
+        never reused, so N structures sharing a text get N distinct real
+        captions instead of all repositioning the same one. `pairs`
+        entries that run out of same-text captions to assign (or whose
+        structure_id doesn't resolve) are reported in the returned
+        `unmatched` list rather than silently dropped."""
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)
@@ -515,15 +664,29 @@ class _Layout:
             snap_by_id = {s["id"]: s for s in snap}
             cap_entries, cap_objs = self._gather_captions(doc)
 
+            unmatched = []
             if pairs:
                 by_text = {}
                 for entry, obj in zip(cap_entries, cap_objs):
-                    by_text.setdefault(entry["text"], (entry, obj))
+                    by_text.setdefault(entry["text"], []).append((entry, obj))
+                next_index = {}
                 targeted = []
                 for oid, text in pairs.items():
-                    found = by_text.get(text)
-                    if oid in snap_by_id and snap_by_id[oid].get("bounds") and found is not None:
-                        targeted.append((oid, found[0], found[1]))
+                    if oid not in snap_by_id or not snap_by_id[oid].get("bounds"):
+                        unmatched.append({"structure_id": oid, "caption": text,
+                                          "reason": "structure not found or has no bounds"})
+                        continue
+                    candidates = by_text.get(text, [])
+                    idx = next_index.get(text, 0)
+                    if idx >= len(candidates):
+                        unmatched.append({
+                            "structure_id": oid, "caption": text,
+                            "reason": (f"no unused caption with text {text!r} left to "
+                                      f"assign ({len(candidates)} available on the page)")})
+                        continue
+                    next_index[text] = idx + 1
+                    entry, obj = candidates[idx]
+                    targeted.append((oid, entry, obj))
             else:
                 boxes = self._graphics_boxes(doc)
                 real, wrapper_map, others = canvas.classify_units(snap)
@@ -552,7 +715,7 @@ class _Layout:
                 cy = row_bottom.get(owner, b["bottom"]) + gap
                 self._set_position(obj, cx, cy)
                 fixed.append({"structure_id": owner, "caption": entry["text"]})
-            return {"fixed": fixed, "backup_path": backup}
+            return {"fixed": fixed, "unmatched": unmatched, "backup_path": backup}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
     def get_layout(self, target="document"):
@@ -653,6 +816,34 @@ class _Layout:
             requested_ids = {mv["object_id"] for mv in moves}
             unexpected = [m for m in d["moved"] if m["id"] not in requested_ids]
             after_by_id = {s["id"]: s for s in after}
+            touched = list(requested_ids | {m["id"] for m in unexpected})
+            touched_boxes, touched_ids = [], []
+            for oid in touched:
+                b = after_by_id.get(oid, {}).get("bounds")
+                if b:
+                    touched_boxes.append(layout_math.Box(**b))
+                    touched_ids.append(oid)
+            if move_with_captions and cap_objs:
+                # Captions sit below their structure's bottom edge, so a
+                # structure landing safely on-page can still carry its
+                # caption past the real page edge -- check the final
+                # (post-move, post-carry) position of every caption
+                # belonging to a touched structure too, not just the
+                # structure boxes above. cap_objs are live COM handles
+                # gathered before the move, so reading their bounds now
+                # reflects wherever _correct_caption_positions left them.
+                for entry, obj, owner in zip(cap_entries, cap_objs, owner_ids):
+                    if owner not in touched:
+                        continue
+                    try:
+                        touched_boxes.append(layout_math.Box(
+                            obj.Left, obj.Top, obj.Right, obj.Bottom))
+                        touched_ids.append(f"{owner} (caption)")
+                    except Exception:
+                        continue
+            off_page = layout_math.page_overflow(
+                touched_boxes, touched_ids,
+                float(doc.Width or 540.0), float(doc.Height or 720.0))
             return {
                 "applied": applied,
                 "missing": missing,
@@ -663,6 +854,7 @@ class _Layout:
                     for oid in applied
                 },
                 "unexpected_moves": unexpected,
+                "violations": {"off_page": off_page},
                 "diff": d,
                 "backup_path": backup,
                 "preview_png_base64": self._preview_png(doc),

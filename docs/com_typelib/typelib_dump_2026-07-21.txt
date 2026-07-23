@@ -1,0 +1,317 @@
+TypeLib GUID={358D7CC8-6160-42DC-A9A3-E942D5325349} lcid=0 ver=22.0
+Total type infos: 230
+=== COErrors (kind=0) === 
+=== COCommandItemType (kind=0) === 
+=== IChemOfficeMenuBars (kind=4) === IChemOfficeMenuBars interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemOfficeMenuBar (kind=4) === IChemOfficeMenuBar interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemOfficeMenus (kind=4) === IChemOfficeMenus interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemOfficeMenu (kind=4) === IChemOfficeMenu interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemOfficeMenuItems (kind=4) === IChemOfficeMenuItems interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemOfficeMenuItem (kind=4) === 
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPoint (kind=4) === ChemDraw point interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawRect (kind=4) === ChemDraw rectangle interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDFormat (kind=0) === 
+=== IChemDrawDataType (kind=4) === IChemDrawDataType Interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawDataTypes (kind=4) === IChemDrawDataTypes Interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPreferences (kind=4) === ChemDraw preferences interface -- these preferences affect every document
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDUnits (kind=0) === 
+=== CDTIFFColor (kind=0) === 
+=== CDTIFFCompression (kind=0) === 
+=== CDEPSBondQuality (kind=0) === 
+=== CDEPSColor (kind=0) === 
+=== CDPrefToolEnum (kind=0) === 
+=== CDFragmentationAnalyzerType (kind=0) === 
+=== CDFragmentationHighlightType (kind=0) === 
+=== CDChemicalWarningTypes (kind=0) === 
+=== DataObjectFiles (kind=4) === The DataObjectFiles object is a collection of filenames used by the DataObject object (vbCFFiles format only).
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== DataObject (kind=4) === The DataObject object is used for specifying formats and data that will be supported for OLE drag and drop operations.
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== ClipBoardConstants (kind=0) === Clipboard format constants.
+=== IChemDrawObjects (kind=4) === ChemDraw objects interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawObject (kind=4) === ChemDraw object interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSettings (kind=4) === ChemDraw settings interface -- settings that affect individual documents
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDJustification (kind=0) === 
+=== CDAminoAcidTermini (kind=0) === 
+=== IChemDrawGroup (kind=4) === ChemDraw group interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDGroupType (kind=0) === 
+=== CDSequenceType (kind=0) === 
+=== IChemDrawAtoms (kind=4) === ChemDraw atoms interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawAtom (kind=4) === ChemDraw atom interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDNodeType (kind=0) === 
+=== CDRadical (kind=0) === 
+=== CDLabelDisplay (kind=0) === 
+=== CDAtomCIPType (kind=0) === 
+=== CDAtomGeometry (kind=0) === 
+=== CDAtomSubstituentType (kind=0) === 
+=== CDRingBondCount (kind=0) === 
+=== CDUnsaturation (kind=0) === 
+=== CDReactionStereo (kind=0) === 
+=== CDTranslation (kind=0) === 
+=== CDIsotopicAbundance (kind=0) === 
+=== IChemDrawAltGroup (kind=4) === ChemDraw alternative group interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawText (kind=4) === ChemDraw caption interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTextStyles (kind=4) === ChemDraw text styles interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTextStyle (kind=4) === ChemDraw text style interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDFontStyle (kind=0) === 
+=== IChemDrawBonds (kind=4) === ChemDraw bonds interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawBond (kind=4) === ChemDraw bond interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDBondOrder (kind=0) === 
+=== CDBondDisplay (kind=0) === 
+=== CDBondDoublePosition (kind=0) === 
+=== CDBondTopology (kind=0) === 
+=== CDBondReactionParticipation (kind=0) === 
+=== CDBondCIPType (kind=0) === 
+=== IChemDrawGraphics (kind=4) === ChemDraw graphic objects interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawGraphic (kind=4) === ChemDraw graphic object interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDGraphicType (kind=0) === 
+=== CDLineType (kind=0) === 
+=== CDRectangleType (kind=0) === 
+=== CDOvalType (kind=0) === 
+=== CDOrbitalType (kind=0) === 
+=== IChemDrawSplines (kind=4) === ChemDraw splines interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSpline (kind=4) === ChemDraw spline interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDArrowHeadType (kind=0) === 
+=== CDArrowHeadPositionType (kind=0) === 
+=== CDFillType (kind=0) === 
+=== IChemDrawTexts (kind=4) === ChemDraw captions interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPictures (kind=4) === ChemDraw pictures interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPicture (kind=4) === ChemDraw picture interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDPictureType (kind=0) === 
+=== IChemDrawGroups (kind=4) === ChemDraw groups interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTables (kind=4) === ChemDraw tables interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTable (kind=4) === ChemDraw table interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawCells (kind=4) === ChemDraw cells interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawCell (kind=4) === ChemDraw cell interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawBorder (kind=4) === ChemDraw border interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawAltGroups (kind=4) === ChemDraw alternative groups interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawGeometries (kind=4) === ChemDraw geometries interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawGeometry (kind=4) === ChemDraw geometry interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDGeometryType (kind=0) === 
+=== IChemDrawConstraints (kind=4) === ChemDraw constraints interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawConstraint (kind=4) === ChemDraw constraint interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDConstraintType (kind=0) === 
+=== IChemDrawReactionSchemes (kind=4) === ChemDraw reaction schemes interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawReactionScheme (kind=4) === ChemDraw reaction scheme interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawReactionSteps (kind=4) === ChemDraw reaction steps interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawReactionStep (kind=4) === ChemDraw reaction step interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawReactionStepComponents (kind=4) === ChemDraw reaction step components interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawArrow (kind=4) === ChemDraw arrow and line object interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDNoGoType (kind=0) === 
+=== CDReactionSchemeType (kind=0) === 
+=== IChemDrawArrows (kind=4) === ChemDraw arrow and line objects interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTLCPlates (kind=4) === ChemDraw TLC Plates interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTLCPlate (kind=4) === ChemDraw TLC Plate interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTLCLanes (kind=4) === ChemDraw TLC Lanes interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTLCLane (kind=4) === ChemDraw TLC Lane interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTLCSpots (kind=4) === ChemDraw TLC Spots interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawTLCSpot (kind=4) === ChemDraw TLC Spot interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawObjectTag (kind=4) === ChemDraw object tag interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDObjectTagType (kind=0) === 
+=== CDPositioningType (kind=0) === 
+=== IChemDrawStoichiometryGrids (kind=4) === ChemDraw Stoichiometry Grids interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawStoichiometryGrid (kind=4) === ChemDraw Stoichiometry Grid interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSGComponents (kind=4) === ChemDraw Stoichiometry Grid Components interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSGComponent (kind=4) === ChemDraw Stoichiometry Grid component interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSGProperties (kind=4) === ChemDraw Stoichiometry Grid Properties interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSGProperty (kind=4) === ChemDraw Stoichiometry Grid Property interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPlasmidMaps (kind=4) === ChemDraw PlasmidMaps interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPlasmidMap (kind=4) === ChemDraw Plasmid Maps interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPlasmidMarkers (kind=4) === ChemDraw PlasmidMarkers interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPlasmidMarker (kind=4) === ChemDraw Plasmid Marker interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPlasmidRegions (kind=4) === ChemDraw PlasmidRegions interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawPlasmidRegion (kind=4) === ChemDraw Plasmid Region interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSymbols (kind=4) === ChemDraw symbol objects interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSymbol (kind=4) === ChemDraw symbol object interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDSymbolType (kind=0) === 
+=== IChemDrawBrackets (kind=4) === ChemDraw bracket objects interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawBracket (kind=4) === ChemDraw bracket object interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDBracketType (kind=0) === 
+=== CDBracketUsage (kind=0) === 
+=== CDPolymerRepeatPattern (kind=0) === 
+=== CDPolymerFlipType (kind=0) === 
+=== CDExternalConnectionType (kind=0) === 
+=== CDEnhancedStereoType (kind=0) === 
+=== IChemDrawFragmentationAnalyzer (kind=4) === ChemDraw fragmentation event interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawMassFragments (kind=4) === ChemDraw mass fragments interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawMassFragment (kind=4) === ChemDraw mass fragment interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawFragmentationLines (kind=4) === ChemDraw fragmentation lines interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawFragmentationLine (kind=4) === ChemDraw fragmentation line interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawObjectTags (kind=4) === ChemDraw object tags interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawAnnotations (kind=4) === ChemDraw annotations interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawAnnotation (kind=4) === ChemDraw annotation interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawSelection (kind=4) === ChemDraw Selection interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDLineHeight (kind=0) === 
+=== IChemDrawApplication (kind=4) === IChemDrawApplication interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawDocument (kind=4) === IChemDrawDocument interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== IChemDrawDocuments (kind=4) === IChemDrawDocuments interface
+    <error reading funcs: function takes exactly 1 argument (2 given)>
+=== CDDrawingSpaceType (kind=0) === 
+=== LONG_PTR (kind=6) === 
+=== CDArrowType (kind=0) === 
+=== CDSplineType (kind=0) === 
+=== Point (kind=5) === ChemDraw Point Class
+=== Rect (kind=5) === ChemDraw Rectangle Class
+=== Application (kind=5) === ChemDraw Application Class
+=== DocumentWin (kind=5) === ChemDraw Document Class
+=== Documents (kind=5) === ChemDraw Document Collection Class
+=== MenuBars (kind=5) === MenuBars collection
+=== MenuBar (kind=5) === MenuBar object
+=== Menus (kind=5) === Menus collection
+=== Menu (kind=5) === Menu object
+=== MenuItems (kind=5) === MenuItems collection
+=== MenuItem (kind=5) === MenuItem object
+=== Preferences (kind=5) === ChemDraw Preferences Class
+=== Object (kind=5) === ChemDraw Object Class
+=== Objects (kind=5) === ChemDraw Object Collection Class
+=== Selection (kind=5) === ChemDraw Selection Class
+=== Atoms (kind=5) === ChemDraw Atoms Class
+=== Atom (kind=5) === ChemDraw Atom Class
+=== Bonds (kind=5) === ChemDraw Bonds Class
+=== Bond (kind=5) === ChemDraw Bond Class
+=== Graphics (kind=5) === ChemDraw Graphic Objects Class
+=== Graphic (kind=5) === ChemDraw Graphic Object Class
+=== Arrows (kind=5) === ChemDraw Arrows Class
+=== Arrow (kind=5) === ChemDraw Arrow Class
+=== Brackets (kind=5) === ChemDraw Brackets Class
+=== Bracket (kind=5) === ChemDraw Bracket Class
+=== Symbols (kind=5) === ChemDraw Symbols Class
+=== Symbol (kind=5) === ChemDraw Symbol Class
+=== Splines (kind=5) === ChemDraw Splines Class
+=== Spline (kind=5) === ChemDraw Spline Class
+=== Styles (kind=5) === ChemDraw Text Styles Class
+=== Style (kind=5) === ChemDraw Text Style Class
+=== Captions (kind=5) === ChemDraw Captions Class
+=== caption (kind=5) === ChemDraw Caption Class
+=== ObjectTags (kind=5) === ChemDraw Object Tags Class
+=== ObjectTag (kind=5) === ChemDraw Object Tag Class
+=== Pictures (kind=5) === ChemDraw Pictures Class
+=== Picture (kind=5) === ChemDraw Picture Class
+=== Border (kind=5) === ChemDraw Border Class
+=== Cells (kind=5) === ChemDraw Cells Class
+=== Cell (kind=5) === ChemDraw Cell Class
+=== Tables (kind=5) === ChemDraw Tables Class
+=== Table (kind=5) === ChemDraw Table Class
+=== TLCSpots (kind=5) === ChemDraw TLC Spots Class
+=== TLCSpot (kind=5) === ChemDraw TLC Spot Class
+=== TLCLanes (kind=5) === ChemDraw TLC Lanes Class
+=== TLCLane (kind=5) === ChemDraw TLC Lane Class
+=== TLCPlates (kind=5) === ChemDraw TLC Plates Class
+=== TLCPlate (kind=5) === ChemDraw TLC Plate Class
+=== SGProperties (kind=5) === ChemDraw Stoichiometry Grid Properties Class
+=== SGProperty (kind=5) === ChemDraw Stoichiometry Grid Property Class
+=== SGComponents (kind=5) === ChemDraw Stoichiometry Grid Components Class
+=== SGComponent (kind=5) === ChemDraw Stoichiometry Grid Component Class
+=== StoichiometryGrids (kind=5) === ChemDraw Stoichiometry Grids Class
+=== StoichiometryGrid (kind=5) === ChemDraw Stoichiometry Grid Class
+=== PlasmidMarkers (kind=5) === ChemDraw PlasmidMarkers Class
+=== PlasmidMarker (kind=5) === ChemDraw Plasmid Marker Class
+=== PlasmidRegions (kind=5) === ChemDraw PlasmidRegions Class
+=== PlasmidRegion (kind=5) === ChemDraw Plasmid Region Class
+=== PlasmidMaps (kind=5) === ChemDraw PlasmidMaps Class
+=== PlasmidMap (kind=5) === ChemDraw Plasmid Map Class
+=== Groups (kind=5) === ChemDraw Groups Class
+=== Group (kind=5) === ChemDraw Group Class
+=== AltGroups (kind=5) === ChemDraw Alternative Groups Class
+=== AltGroup (kind=5) === ChemDraw Alternative Group Class
+=== Geometries (kind=5) === ChemDraw Geometries Class
+=== Geometry (kind=5) === ChemDraw Geometry Class
+=== Constraints (kind=5) === ChemDraw Constraints Class
+=== Constraint (kind=5) === ChemDraw Constraint Class
+=== ReactionSchemes (kind=5) === ChemDraw Reaction Schemes Class
+=== ReactionScheme (kind=5) === ChemDraw Reaction Scheme Class
+=== ReactionSteps (kind=5) === ChemDraw Reaction Steps Class
+=== ReactionStep (kind=5) === ChemDraw Reaction Step Class
+=== ReactionStepComponents (kind=5) === ChemDraw Reaction Step Components Class
+=== FragmentationAnalyzer (kind=5) === ChemDraw Fragmentation Event Class
+=== MassFragments (kind=5) === ChemDraw Mass Fragments Class
+=== MassFragment (kind=5) === ChemDraw Mass Fragment Class
+=== FragmentationLines (kind=5) === ChemDraw Fragmentation Lines Class
+=== FragmentationLine (kind=5) === ChemDraw Fragmentation Line Class
+=== Settings (kind=5) === ChemDraw Settings Class
+=== dataType (kind=5) === CS ChemDraw 64-bit Data Type Class
+=== DataTypes (kind=5) === CS ChemDraw 64-bit Data Type List Class
+=== Annotations (kind=5) === ChemDraw Annotations Class
+=== Annotation (kind=5) === ChemDraw Annotation Class

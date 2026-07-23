@@ -45,6 +45,17 @@ def test_bond_endpoints_not_actually_bonded_raises_value_error():
         split_atoms(atom_ids, bonds, 1, 3, side_atom_id=1)  # 1-3 not a bond
 
 
+def test_side_atom_disconnected_from_split_bond_raises_value_error():
+    # Two disconnected fragments in one multi-fragment unit (e.g. a salt's
+    # ion pair): 1-2-3 contains the bond being split; 10-11 is a separate,
+    # unrelated fragment. side_atom_id=10 must not silently be accepted as
+    # "the side" of a bond it has no path to at all.
+    atom_ids = [1, 2, 3, 10, 11]
+    bonds = [("b12", 1, 2), ("b23", 2, 3), ("b1011", 10, 11)]
+    with pytest.raises(ValueError):
+        split_atoms(atom_ids, bonds, 1, 2, side_atom_id=10)
+
+
 class _UnhashableToken:
     """Stands in for a live COM Bond object, which pywin32 does not make
     hashable — bond_ids must not require hashing its tokens."""

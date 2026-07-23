@@ -12,12 +12,17 @@ class _StateDiff:
             self._last_snapshot = snap  # raw, unfiltered — diff baseline unchanged
             cap_entries, _ = self._gather_captions(doc)
             boxes = self._graphics_boxes(doc)
-            out = canvas.build_canvas(snap, cap_entries, boxes)
+            out = canvas.build_canvas(
+                snap, cap_entries, boxes,
+                page_width=float(doc.Width or 540.0),
+                page_height=float(doc.Height or 720.0))
             return {
                 "document": doc.name,
                 "structures": out["structures"],
                 "non_structure_units": out["non_structure_units"],
                 "overlapping_pairs": out["violations"]["overlapping_structures"],
+                "off_page": out["violations"]["off_page"],
+                "page_bounds": out["page_bounds"],
                 "chemical_warnings": doc.NumChemicalWarnings,
             }
         return self._run(go, timeout=SLOW_TIMEOUT)

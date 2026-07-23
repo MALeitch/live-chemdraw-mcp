@@ -1,8 +1,10 @@
 """Document/session lifecycle: connection status, opening/creating/switching
 documents, the shared scratch document, save/undo/redo."""
 import os
+import time
 
 from .. import snapshots, state
+from ..com import doc_window
 from ..domain import canvas
 from ..errors import ChemDrawError, InvalidInputError
 from ._plumbing import SLOW_TIMEOUT
@@ -54,6 +56,79 @@ class _DocumentSession:
             doc.Activate()
             return {"active_document": doc.name}
         return self._run(go)
+
+    def close_document(self, name, discard_changes=False):
+        """Close one open document by name -- IChemDrawDocument.Close() is
+        a confirmed no-op over COM, so this goes around it via a Win32
+        WM_CLOSE posted straight to that document's own MDI child window
+        (see chemdraw_connector/com/doc_window.py for the full story on how
+        that was found and confirmed safe).
+
+        A document with unsaved changes (`.Modified`) is refused unless
+        discard_changes=True, exactly like chemdraw_save_document's own
+        overwrite guard -- closing throws away anything not already saved
+        to disk, and there is no way to ask ChemDraw's own "Save changes?"
+        prompt to answer for us (see doc_window.py: this only works at all
+        because Modified is cleared BEFORE the close, which is what
+        suppresses that prompt from appearing in the first place)."""
+        def go():
+            app = self._conn.app()
+            target = None
+            for i in range(1, app.Documents.Count + 1):
+                d = app.Documents.Item(i)
+                if d.name == name:
+                    target = d
+                    break
+            if target is None:
+                raise ChemDrawError(
+                    f"No open document named {name!r}. Open documents: "
+                    f"{[app.Documents.Item(i).name for i in range(1, app.Documents.Count + 1)]}"
+                )
+            if target.Modified and not discard_changes:
+                raise InvalidInputError(
+                    f"{name!r} has unsaved changes. Save it first "
+                    "(chemdraw_save_document, after chemdraw_set_active_"
+                    "document if it isn't already active) and retry, or "
+                    "pass discard_changes=true to close without saving."
+                )
+            was_active = (app.ActiveDocument is not None
+                         and app.ActiveDocument.name == name)
+            if discard_changes and target.Modified:
+                # Must happen BEFORE the close -- see doc_window.py's
+                # module docstring on why this is what actually suppresses
+                # ChemDraw's own "Save changes?" modal.
+                target.Modified = False
+
+            hwnd = doc_window.find_document_window(name, self._conn.hwnd)
+            if hwnd is None:
+                raise ChemDrawError(
+                    f"Could not find {name!r}'s own window to close it "
+                    "(IChemDrawDocument.Close() itself is a confirmed "
+                    "no-op over COM on this ChemDraw version)."
+                )
+            doc_window.close_document_window(hwnd)
+
+            for _ in range(30):
+                time.sleep(0.1)
+                still_open = any(
+                    app.Documents.Item(i).name == name
+                    for i in range(1, app.Documents.Count + 1))
+                if not still_open:
+                    break
+            else:
+                raise ChemDrawError(
+                    f"Sent a close request for {name!r} but it still shows "
+                    "up in Documents after waiting 3s -- check the ChemDraw "
+                    "window by hand; it may be showing an unexpected dialog."
+                )
+
+            new_active = None
+            if was_active:
+                active = app.ActiveDocument
+                new_active = active.name if active is not None else None
+            return {"closed": name, "remaining_documents": app.Documents.Count,
+                    "new_active_document": new_active}
+        return self._run(go, timeout=SLOW_TIMEOUT)
 
     # One reusable scratch document. Document.Close() is a no-op over COM
     # (probed live on ChemDraw 26 — every variant), so every throwaway

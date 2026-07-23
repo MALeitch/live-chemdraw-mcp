@@ -21,10 +21,54 @@ the document you have open.
   into a panel box in one call, captions riding along, nothing ever
   rescaled; `chemdraw_get_layout`/`chemdraw_move_objects` for raw-geometry
   plans with automatic collateral-movement detection
-- **Chemistry QC** — read/set stereochemistry, duplicate detection, valence
-  warnings, IUPAC naming, HRMS text generation
+- **Chemistry QC** — read/set stereochemistry (wedge/hash, "and1"/"or1"
+  enhanced-stereo grouping), duplicate detection, valence warnings, IUPAC
+  naming, HRMS text generation
 - **Publication tools** — journal style presets, reaction schemes, and
   derivative-library enumeration with RDKit-computed properties
+- **Annotations** — mechanism/reaction arrows (`chemdraw_make_arrow`: solid/
+  hollow/angle heads, single-barb "fishhook" electron-pushing arrows,
+  crossed-out "no-go" pathway markers, dipole markers) and symbols
+  (`chemdraw_make_symbol`: racemic/absolute/relative stereo-descriptor
+  labels; lone pairs/radicals/daggers also place but currently render at a
+  tiny, apparently unscalable default size — see the tool's own docstring).
+  Isotope labeling (`chemdraw_edit_atom(..., isotope=13, ...)`) survives
+  export as real isotope notation, not just a ChemDraw-display label.
+  **Limitation:** arrows/symbols are free-floating — moving a nearby
+  structure with `chemdraw_move_objects`/`chemdraw_transform` will NOT carry
+  them along, the same class of gap already documented for captions below.
+  Curved/arc arrows and true double-object ⇌ equilibrium-arrow pairs aren't
+  supported yet — both were probed live and need more COM investigation
+  before a design commitment (see `docs/com_typelib/`)
+- **Polymer repeat-unit brackets** (`chemdraw_make_bracket`: square/curly/
+  round glyph, SRU/monomer/copolymer/crosslink/... usage with ChemDraw's own
+  auto-generated abbreviation label — "n"/"mon"/"xl"/etc.) wraps a structure
+  (or an explicit rectangle) with an opening + closing bracket pair.
+  **Limitations, confirmed live, not solved:** RepeatCount/SRULabel/
+  ComponentOrder cannot be set via COM at all (both get and put reliably
+  raise); the pair's mirrored orientation ("[...]" vs two identically-
+  oriented marks) is unreliable once a second bracket exists in one
+  automation session — always check the exported image; brackets are
+  purely decorative (not bound to real atom/bond membership despite
+  ChemDraw exposing InsideAtoms/ContainedAtoms/CrossingBonds properties —
+  confirmed these don't reflect true geometry) and share the same
+  free-floating/doesn't-move-with-the-structure limitation as arrows/
+  symbols above
+- **TLC plates** (`chemdraw_make_tlc_plate`: rectangular plate outline with
+  labeled Rf-spot lanes for reaction-monitoring figures) — a spot's vertical
+  position is driven entirely by its `rf` (0-1) property, which ChemDraw
+  itself interpolates between the plate's origin/solvent-front lines
+  (confirmed live via measured screenshot pixel positions, within ~1% of
+  the expected fraction) — no manual position math needed. Supports
+  `show_rf` (auto "Rf = 0.NN" label), `filled`/`bold`/`dashed` (a hollow
+  dashed-outline circle is visually confirmed distinct from a solid dot),
+  and an experimental `tail` (comet-tail smear) whose visual effect could
+  not be confirmed at available screenshot resolution. **Hard limit,
+  confirmed live and enforced by the tool (raises before any COM call): a
+  single lane can hold at most 2 spots** — ChemDraw's own `AddSpot` is a
+  silent no-op past that, with no error at all. Same free-floating/
+  doesn't-move-with-the-structure limitation as arrows/symbols/brackets
+  above.
 
 This README covers setup, architecture, and hard-won operational facts —
 not a per-tool reference. Each tool's exact parameters, return shape, and
@@ -84,9 +128,10 @@ chemdraw_connector/
   domain/        pure logic, zero COM imports, pytest-covered
   bridge/        the seam: every tool call goes through here
     __init__.py  composes ChemDrawBridge from the mixins below
-    _document_session.py, _enumeration.py, _layout.py, _manipulation.py,
-    _plumbing.py, _properties_qc.py, _reaction.py, _selection.py,
-    _shorthand.py, _state_diff.py, _stereochemistry.py, _structure_io.py,
+    _annotations.py, _document_session.py, _enumeration.py, _layout.py,
+    _manipulation.py, _plumbing.py, _properties_qc.py, _reaction.py,
+    _selection.py, _shorthand.py, _specialty_objects.py, _state_diff.py,
+    _stereochemistry.py, _structure_io.py,
     _style.py    one focused mixin per concern (document lifecycle,
                  layout, shorthand contraction, stereochemistry...)
   targets.py     structure addressing (tags, selection, doc) + safe
@@ -96,6 +141,15 @@ chemdraw_connector/
 tools/           thin MCP tool definitions
 server.py        FastMCP entry point (stdio)
 ```
+
+`docs/com_typelib/` — a live COM reflection dump of ChemDraw's full type
+library (interfaces/methods/enums), plus the reusable probe scripts that
+generated it. This is the source of truth for COM surface confirmed to exist
+but not yet implemented in this connector (native stoichiometry grids,
+Markush/alt-groups, as of the 2026-07-21 capture — mechanism/reaction arrow
+types, atom isotope labeling, reaction symbols, enhanced-stereo flags,
+polymer brackets, and TLC plates are now implemented, see Capabilities
+above) — see its own README for details.
 
 `bridge/` used to be a single `bridge.py`; it was split into a package once
 the original file grew past 2,000 lines with ~90 methods covering unrelated
@@ -301,6 +355,185 @@ through here" property is unchanged.
   clears it on each acquisition.
 - Coordinates are points (72/inch), top-left origin; default bond length is
   14.4 pt. Backups land in `%LOCALAPPDATA%\chemdraw-mcp\backups`.
+- `IChemDrawArrow.ArrowHeadType` does **not** take the `CDArrowType` bitmask
+  its name suggests (`NoHead`/`HalfHead`/`FullHead`/`Resonance`/
+  `Equilibrium`/`Hollow`/`RetroSynthetic`) — that assumption, made from
+  type-library reflection alone, was tested live and found wrong before any
+  bridge code was written around it. It actually takes `CDArrowHeadType`
+  (`Solid`/`Hollow`/`Angle` — the arrowhead's FILL style). The real
+  head-count/shape control is `ArrowHeadPositionStart`/
+  `ArrowHeadPositionTail`, each taking `CDArrowHeadPositionType`
+  (`None`/`Full`/`HalfLeft`/`HalfRight`) — confirmed live via a large
+  `HeadSize` + 600 DPI screenshot that `HalfLeft`/`HalfRight` render a
+  genuine single-barb "fishhook" arrowhead, the classic single-electron
+  mechanism-arrow shape, via a completely different property than its enum
+  name would suggest. `IChemDrawArrow` also does **not** share
+  `IChemDrawSpline`'s `NumPoints`/`GetPoint`/`SetPoint` surface (confirmed
+  live: raises `AttributeError`) — a plain Arrow is a straight 2-point
+  object; setting `ArcOrigin` alone (get/put, exists on the object) does
+  NOT flip the read-only `IsArc` to `True` either, so curved/arc arrows
+  have no confirmed COM path yet. See `docs/com_typelib/` for the full
+  reflection dump this was checked against.
+- `IChemDrawSymbol.SymbolType` is **get-only** — must be fixed at creation
+  via `MakeSymbol(type)`'s argument, never set afterward. `Position` and
+  `Start` are linked (setting one moves the other to match, confirmed
+  live). Types 10-12 (`racemic`/`absolute`/`relative`) render as clear
+  boxed text labels; types 0-9 (lone pair, electron, radical cation/anion,
+  circle plus/minus, dagger, double dagger, plus, minus) render at a tiny
+  default size (confirmed live: bounds as small as ~0.13pt for the
+  electron-dot type) — `Height`/`Width` are read-only, and a
+  `doc.Objects.Scale()` call after selecting one didn't visibly resize it
+  in a quick test; no confirmed way to enlarge these yet.
+- `Atom.Isotope` (plain settable mass-number int) survives export as real
+  isotope notation — confirmed live: SMILES `C[13CH2]O`, molfile `M  ISO`
+  block — not a ChemDraw-display-only label. It's genuinely distinct from
+  `Atom.IsotopicAbundance` (a separate enrichment-level enum: natural/
+  enriched/deficient/nonnatural/any). **Known limitation, not solved**:
+  writing `Isotope = 0` to clear a label back to natural abundance is
+  silently rejected (readback keeps the prior nonzero value, no exception)
+  when the atom's isotope is already nonzero — reproduced deterministically
+  5/5 attempts within a single COM session, not a transient flake. This
+  turns out not to be isotope-specific: `Atom.Charge = 0` has the
+  **identical** rejection behavior when the atom's charge is already
+  nonzero (confirmed live) — looks like a general ChemDraw COM quirk
+  treating a literal `0` write as a no-op/unset sentinel rather than a real
+  assignment, on at least these two atom properties. A negative value IS
+  accepted and clamps to 0 (confirmed: `Isotope = -1` → readback `0`) —
+  **but do not use this as a workaround**: confirmed live that
+  `Atom.Isotope = -1` also corrupts that SAME atom's `Charge` to `-1` as a
+  side effect (reproduced on a fresh, never-charged atom), and the
+  corrupted `Charge` could then not be fixed back to `0` either (same
+  0-from-nonzero rejection, recursively) — chasing the clamping trick trades
+  one data-corruption bug for another. `edit_atom` writes the requested
+  value plainly and always reports the real post-write value, so a caller
+  can see honestly whether a reset landed instead of a workaround silently
+  claiming success while corrupting charge.
+- `EnhancedStereoType`/`EnhancedStereoGroupNumber` (the "and1"/"or1"
+  relative-stereo notation) live directly on `IChemDrawAtom`, confirmed
+  settable — a per-atom property, not document- or bond-level.
+- **Polymer brackets (`IChemDrawBracket`), confirmed live 2026-07-21, several
+  surprises the original plan (reflection-only) got wrong:**
+  - `doc.MakeBracket(type)`/`doc.Brackets` work exactly like
+    `doc.Groups`/`doc.Captions` (`.Count`/`.Item(i)`), and `MakeObjectTag`/
+    `GetObjectTag` tag/round-trip on a Bracket the same as any other object.
+  - `Bracket.Start`/`.End` **reject atom objects outright**
+    (`Type mismatch` COM error) — plain `{X, Y}` points only, same as
+    Arrow/Symbol. There is no COM-level "true structural anchoring."
+  - **Big one:** one `IChemDrawBracket` is **one bracket glyph** (a single
+    line/curve with hook end-caps) — **not** a full enclosing "[...]" pair.
+    A real SRU/repeat-unit notation needs **two** Bracket objects (an
+    opening and a closing mark); `chemdraw_make_bracket` creates both.
+  - `BracketUsage` drives a real, useful, ChemDraw-generated abbreviation
+    label next to the bracket — confirmed live: `sru`→"n", `monomer`→"mon",
+    `crosslink`→"xl", `unspecified`→no label. This label is NOT the
+    (broken, see below) `SRULabel` property; it's some other internal
+    text-generation path tied directly to the usage enum.
+  - `RepeatCount`, `SRULabel`, and `ComponentOrder` — confirmed live, both
+    **get and put reliably raise a COM exception** on a `MakeBracket()`-
+    created object, regardless of `BracketUsage`. Reflection shows get/put
+    for all three; none of the three actually work over COM. No custom
+    label text or explicit repeat count is achievable this way — only the
+    fixed auto-generated abbreviation above.
+  - `InsideAtoms`/`OutsideAtoms`/`ContainedAtoms`/`CrossingBonds` (the
+    read-only "what does this bracket enclose" properties) do **not**
+    reliably reflect real geometric containment — confirmed inconsistent
+    across several controlled tests (a 4-atom chain with a bracket box
+    wrapping only its middle two atoms reported one atom clearly OUTSIDE
+    the box as `ContainedAtoms`; reversing the box's corner order didn't
+    change the result either). Treat a bracket as purely decorative.
+  - Hook (end-cap) direction is driven by which point is `Start` vs `End`
+    (top→bottom renders hooks curling right/"["; bottom→top curls
+    left/"]") — reliable for a single, lone bracket, and
+    `PolymerFlipType` also reliably flips a lone bracket. **Neither is
+    reliable once a second Bracket exists in the same COM session**:
+    confirmed live across many controlled tests (reversing Start/End,
+    toggling PolymerFlipType, swapping creation order — separately and in
+    combination) that the second-created bracket sometimes renders with
+    its own correct orientation and sometimes visually "sticks" to match
+    the first one instead, unpredictably. Not root-caused — two brackets
+    created via two separate process reattachments to the same live
+    ChemDraw DID mirror correctly, so this looks like some internal
+    rendering-cache quirk specific to touching multiple Brackets within
+    one automation connection. `chemdraw_make_bracket` codes the
+    semantically-correct opposite vectors anyway (it's right more often
+    than not), but always screenshot the result — the pair may need a
+    manual orientation fix in the ChemDraw UI.
+  - Since `doc.Brackets` is a wholly separate collection from `doc.Groups`
+    (never touched by `targets.iter_units`), a bracket never inflates
+    `chemdraw_status`/`chemdraw_describe_canvas` structure counts, and
+    `domain/canvas.py`'s `find_wrapper_duplicates` (tuned for
+    caption-wrapper geometry) never sees or misclassifies one — confirmed
+    live, no interaction at all.
+- **TLC plates (`IChemDrawTLCPlate`/`Lane`/`Spot`), confirmed live
+  2026-07-21, four separate COM bugs the original plan (reflection-only)
+  had no way to predict:**
+  - `doc.MakeTLCPlate()`/`doc.TLCPlates` work exactly like
+    `doc.MakeBracket()`/`doc.Brackets`, and `doc.Objects.Clear()` (what
+    `use_scratch_document` calls) confirmed to clear `doc.TLCPlates` too —
+    no special-case scratch-clearing code needed, unlike `doc.Graphics`.
+  - **Good news:** `IChemDrawTLCSpot` has **no** `Position`/`Bounds`/
+    `Top`/`Bottom`/`Left`/`Right` at all — a spot's rendered position is
+    driven entirely by its `Rf` property (0-1), linearly interpolated by
+    ChemDraw itself between the plate's `OriginFraction`/
+    `SolventFrontFraction` lines. Confirmed via a 5-spot, 3-lane
+    screenshot: measured pixel positions for rf=0.2/0.35/0.5/0.8/0.9 all
+    landed within ~1% of the expected fraction, and lanes rendered as
+    evenly spaced columns automatically. No `domain/tlc_layout.py` module
+    was needed — there was no real position math left to do.
+  - `AddLane(retval)`/`AddSpot(retval)` **reject a true zero-arg call**
+    ("Parameter not optional") despite reflection showing no real input
+    parameter — a deep `GetFuncDesc`/`GetRefTypeInfo` dump (not just the
+    name-only pass) showed the "retval" arg is actually typed as
+    `IChemDrawTLCLane**`/`IChemDrawTLCSpot**` with IN|OUT flags but not the
+    `PARAMFLAG_FRETVAL` bit that would let win32com treat it as a pure
+    return value. Fix: pass a literal `None` — it satisfies the call and
+    is never actually consumed; the real new object comes back as the
+    normal return value.
+  - **The Lane object `plate.AddLane(None)` itself returns is unreliable
+    for that lane's own immediately-following `.AddSpot()` call** —
+    reproduced deterministically: whichever Lane was most recently created
+    (by creation order, not call order) raises a bare COM "Exception
+    occurred" on `.AddSpot()` forever via that specific reference, even
+    after touching unrelated objects in between. Fix, also confirmed
+    live: re-fetch the same lane fresh via
+    `plate.Lanes.Item(plate.Lanes.Count)` immediately after `AddLane` and
+    use that reference for `AddSpot` — works immediately, every time.
+  - **A single Lane can hold at most 2 spots via `AddSpot`** — confirmed
+    as a hard, deterministic cap (reproduced even with full
+    plate/lane/spot refetching at every step, so it isn't a staleness
+    artifact). A 3rd `AddSpot()` call on a lane already at 2 spots is a
+    **silent no-op**: `Spots.Count` never increases, no exception, no
+    signal of failure at all — `chemdraw_make_tlc_plate` validates and
+    rejects a 3rd spot per lane before making any COM calls, since
+    ChemDraw itself won't tell you it silently dropped one. Relatedly:
+    calling `AddSpot()` twice in a row on the same lane *without* writing
+    any property to the first spot in between is *also* a silent no-op
+    for the second call (the first spot stays "uncommitted" until some
+    property write forces it real).
+  - **Creating spot N+1 in a lane silently resets spot N's
+    `Rf`/`Tail`/`Bold`/`Filled`/`Dashed` back to ChemDraw's defaults**
+    (confirmed live, deterministic, every time — `ShowRf` is the only
+    property observed to survive a sibling's creation). A property
+    written *after* every spot in that lane already exists sticks
+    permanently. So `make_tlc_plate` does a strict two-pass
+    create-all-spots-then-style-all-spots sequence per lane, never
+    interleaving a later `AddSpot` with an earlier spot's style — the
+    reset is scoped to siblings within the same lane only (confirmed live
+    that populating a different lane never disturbs an already-finalized
+    one).
+  - `Tail` is actually a `float` (default `0.0`; setting it to `True`
+    reads back as `-1.0`, not `1.0`) — likely accepts an explicit
+    tail-length value, not explored further. Its visual effect (a
+    comet-tail smear) could **not** be confirmed at available
+    `chemdraw_export_image` resolution (tried 200 and 600 DPI — the 600
+    DPI request didn't appear to actually increase the exported pixel
+    dimensions) — treat as experimental. `Filled=False` + `Dashed=True` +
+    `Bold=True` **was** visually confirmed distinct (a hollow,
+    dashed-outline circle vs. a plain solid dot).
+  - Since `doc.TLCPlates` is a wholly separate collection from
+    `doc.Groups`, a TLC plate never inflates `chemdraw_status`/
+    `chemdraw_describe_canvas` structure counts — confirmed live, same as
+    Brackets/Arrows/Symbols.
 
 ## Troubleshooting
 

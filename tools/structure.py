@@ -1,5 +1,6 @@
 """Document/session, selection, structure I/O, and manipulation tools."""
 import base64
+import json
 
 from mcp.server.fastmcp import Image
 
@@ -28,20 +29,38 @@ def register(mcp, bridge):
     @mcp.tool()
     def chemdraw_new_document() -> str:
         """Create a new empty ChemDraw document and make it active.
-        NOTE: documents can NOT be closed over COM (Close() is a no-op), so
-        every new document is a permanent window until the user closes it by
-        hand. For temporary/test work use chemdraw_use_scratch_document
-        instead."""
+        IChemDrawDocument.Close() itself is a confirmed no-op over COM, but
+        chemdraw_close_document works around that via a Win32 window-close,
+        so a document created here isn't permanently stuck -- call it when
+        you're done with this one. For temporary/test work, prefer
+        chemdraw_use_scratch_document instead of creating a new document at
+        all."""
         return as_json(bridge.new_document())
+
+    @mcp.tool(description=(
+        "Close one open document by name (chemdraw_list_documents for the "
+        "list). Works around IChemDrawDocument.Close() being a confirmed "
+        "no-op over COM by posting a Win32 close directly to that "
+        "document's own window instead. A document with unsaved changes is "
+        "refused unless discard_changes=true -- save it first "
+        "(chemdraw_save_document) if you want to keep the changes, since "
+        "there is no way to answer ChemDraw's own \"Save changes?\" prompt "
+        "for it once this starts. If the closed document was the active "
+        "one, `new_active_document` reports whichever document ChemDraw "
+        "switched to automatically (MDI default), or null if none remain."))
+    def chemdraw_close_document(name: str, discard_changes: bool = False) -> str:
+        return as_json(bridge.close_document(name, discard_changes))
 
     @mcp.tool()
     def chemdraw_use_scratch_document() -> str:
         """Activate the single reusable scratch document
         (chemdraw-mcp-scratch.cdxml), CLEARING whatever it contained from
-        last time. Use this instead of chemdraw_new_document for throwaway
-        work — trial structures, experiments, verification — because COM
-        cannot close documents and each new one permanently clutters the
-        user's ChemDraw window."""
+        last time. Prefer this over chemdraw_new_document for throwaway
+        work — trial structures, experiments, verification — it's one
+        window reused in place rather than a new one each time; even
+        though chemdraw_close_document can clean up a new document
+        afterward, reusing the scratch document avoids the extra round
+        trip entirely."""
         return as_json(bridge.use_scratch_document())
 
     @mcp.tool()
@@ -107,10 +126,20 @@ def register(mcp, bridge):
         """Draw a structure into the active ChemDraw document.
 
         format: smiles | molfile | inchi | name (chemical name, e.g. 'aspirin')
-        | cdxml | cml | helm. Optional x/y places the structure's center at
-        that point (in points, 72/inch, top-left origin), including literal
-        (0, 0); omit BOTH to let ChemDraw choose. Returns the new structure's
-        object_id for later reference."""
+        | cdxml | cml | helm. Optional x/y places the CENTER OF THE WHOLE
+        INSERTION at that point (in points, 72/inch, top-left origin),
+        including literal (0, 0); omit BOTH to let ChemDraw choose. A
+        representation with disconnected fragments (a salt like
+        "[K+].[O-]C(=O)[O-].[K+]", or a name-resolved organometallic like
+        "PdCl2(PPh3)2") inserts as more than one real ChemDraw object —
+        `inserted` has one entry per fragment, each with its own
+        object_id — but x/y moves them together as one rigid group
+        (ChemDraw's own relative placement between fragments is preserved,
+        not collapsed onto a single point). Returns `inserted` (one entry
+        per fragment) plus `off_page`: non-empty if an explicit x/y (or
+        ChemDraw's own auto-placement) put any fragment outside the
+        document's actual page — there is no preview image on this call
+        to catch it visually, so check this field directly."""
         if (x is None) != (y is None):
             raise ValueError("x and y must be given together, or both omitted")
         pos = (x, y) if x is not None else None
@@ -125,11 +154,14 @@ def register(mcp, bridge):
 
     @mcp.tool(description=(
         "Render structures to an image. format: png | svg | emf. With path, "
-        "writes the file and returns the path; without, returns the image "
+        "writes the file and returns the path (refuses to overwrite an "
+        "existing file unless overwrite=true); without, returns the image "
         "inline so you can look at it. " + TARGET_DOC))
     def chemdraw_export_image(format: str = "png", target: str = "document",
-                              path: str = "", dpi: int = 300):
-        result = bridge.export_image(format, _parse(target), path or None, dpi)
+                              path: str = "", dpi: int = 300,
+                              overwrite: bool = False):
+        result = bridge.export_image(format, _parse(target), path or None, dpi,
+                                     overwrite)
         if "base64" in result and format == "png":
             return [f"Rendered {format} at {dpi} dpi.",
                     Image(data=base64.b64decode(result["base64"]), format="png")]
@@ -168,7 +200,17 @@ def register(mcp, bridge):
 
     @mcp.tool(description=(
         "Delete structures from the document. " + TARGET_DOC +
-        " (no default — deleting requires an explicit target)."))
+        " (no default — deleting requires an explicit target). "
+        "target=\"document\"/\"selection\" only ever deletes real "
+        "structures, but a single object_id or a JSON list of them may "
+        "ALSO name a caption (id from chemdraw_get_layout/"
+        "chemdraw_describe_canvas's captions list), or an arrow/symbol/"
+        "bracket/tlc_plate (id from chemdraw_list_arrows/chemdraw_list_"
+        "symbols/chemdraw_list_brackets/chemdraw_list_tlc_plates) — this "
+        "is the way to clean up an orphaned caption (its owning structure "
+        "already deleted) or a bad TLC plate/arrow/bracket, none of which "
+        "chemdraw_undo can reach (it only reverts the user's own manual "
+        "edits, never this connector's own mutations)."))
     def chemdraw_remove(target: str) -> str:
         return as_json(bridge.remove(_parse(target)))
 
@@ -200,18 +242,29 @@ def register(mcp, bridge):
         return as_json(bridge.split_at_bond(_parse(target), bond_ref, side_atom_ref))
 
     @mcp.tool(description=(
-        "Change an existing atom's element (symbol, e.g. 'N') and/or formal "
+        "Change an existing atom's element (symbol, e.g. 'N'), formal "
         "charge (pass set_charge=true to apply charge, so 0 can be set "
-        "explicitly). atom_index accepts either a 1-based position within "
-        "the structure (shifts as atoms are added/removed) or a stable ref "
-        "from chemdraw_list_atoms (e.g. 'a42', recommended when editing "
-        "more than one atom in a structure you didn't just create). "
-        + TARGET_DOC))
+        "explicitly), and/or isotope label (pass set_isotope=true; e.g. "
+        "isotope=13 for 13C, isotope=2 for D — confirmed to survive export "
+        "as real isotope notation: SMILES '[13CH2]', molfile 'M  ISO' "
+        "block, not just a ChemDraw-display-only label). KNOWN LIMITATION, "
+        "confirmed live: setting isotope=0 to clear a label back to "
+        "natural abundance can silently fail to take effect if the atom's "
+        "isotope is already nonzero — this is a general ChemDraw quirk "
+        "(charge=0 has the identical failure mode from a nonzero charge), "
+        "not specific to this tool; always check the returned `isotope` "
+        "field to see whether a reset actually landed. atom_index accepts "
+        "either a 1-based position within the structure (shifts as atoms "
+        "are added/removed) or a stable ref from chemdraw_list_atoms (e.g. "
+        "'a42', recommended when editing more than one atom in a structure "
+        "you didn't just create). " + TARGET_DOC))
     def chemdraw_edit_atom(target: str, atom_index: int | str, element: str = "",
-                           charge: int = 0, set_charge: bool = False) -> str:
+                           charge: int = 0, set_charge: bool = False,
+                           isotope: int = 0, set_isotope: bool = False) -> str:
         return as_json(bridge.edit_atom(
             _parse(target), atom_index, element or None,
-            charge if set_charge else None))
+            charge if set_charge else None,
+            isotope if set_isotope else None))
 
     @mcp.tool(description=(
         "Change an existing bond's order: single | double | triple | "
@@ -229,8 +282,10 @@ def register(mcp, bridge):
         "everything you need to change. edits: list like "
         "[{\"target\": \"claude-...\", \"atom\": \"a42\", \"element\": "
         "\"N\"}, {\"target\": \"claude-...\", \"atom\": \"a57\", "
-        "\"set_charge\": true, \"charge\": -1}, ...] (atom accepts a ref "
-        "or a 1-based index). Returns `applied` and `failed` per-item, "
+        "\"set_charge\": true, \"charge\": -1}, {\"target\": \"claude-...\", "
+        "\"atom\": \"a12\", \"set_isotope\": true, \"isotope\": 13}, ...] "
+        "(atom accepts a ref or a 1-based index). Returns `applied` and "
+        "`failed` per-item, "
         "plus `unexpected_changes` — any structure that changed WITHOUT "
         "being in your list — the same before/after diff "
         "chemdraw_move_objects uses."))
@@ -262,8 +317,29 @@ def register(mcp, bridge):
 
 
 def _parse(target):
-    """Allow a JSON-style comma list in the target string."""
+    """Resolve a target string into what targets.resolve() expects:
+    "selection"/"document" literally, a single object_id, or a list of
+    object_ids.
+
+    Accepts a real JSON array (`["id1","id2"]`, what TARGET_DOC tells
+    callers to send) via json.loads -- a bare comma-split here would
+    instead shred the brackets/quotes into the list items themselves
+    (confirmed live: `["id1","id2"]` split naively on "," produced
+    `['["id1"', '"id2"]']`, so every batch call using JSON-array syntax
+    silently failed with garbled ids). A plain comma-separated string with
+    no brackets (`"id1,id2"`) is still accepted as a convenience fallback
+    for anyone hand-typing a target rather than JSON-encoding it."""
     target = target.strip()
-    if "," in target and target not in ("selection", "document"):
+    if target in ("selection", "document"):
+        return target
+    if target.startswith("["):
+        try:
+            parsed = json.loads(target)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(parsed, list):
+                return [str(p).strip() for p in parsed if str(p).strip()]
+    if "," in target:
         return [p.strip() for p in target.split(",") if p.strip()]
     return target

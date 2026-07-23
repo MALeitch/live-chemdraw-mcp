@@ -17,7 +17,12 @@ def register(mcp, bridge):
         "{\"box_index\": N} or {\"left\":..,\"top\":..,\"right\":..,"
         "\"bottom\":..}. Prefer this over chemdraw_get_layout plus manual "
         "geometry — do not reconstruct these relationships yourself with "
-        "multiple probing calls."))
+        "multiple probing calls. ALWAYS check `violations.off_page` "
+        "(structure ids sitting outside the document's real page, per "
+        "`page_bounds`, and which edge(s) they cross) — a structure drawn "
+        "past the page edge still renders fine in a preview image, since "
+        "preview images auto-crop to whatever was drawn rather than "
+        "showing the page boundary."))
     def chemdraw_describe_canvas(region: dict | None = None) -> str:
         return as_json(bridge.describe_canvas(region))
 
@@ -121,7 +126,10 @@ def register(mcp, bridge):
         "a corrective move. Each structure's own captions move with it "
         "unless move_with_captions is false. The result reports "
         "`resulting_bounds` for every moved object — use those instead of "
-        "a follow-up read to verify the layout. A .cdxml backup is saved "
+        "a follow-up read to verify the layout. Also check "
+        "`violations.off_page` — moving a structure can push it outside "
+        "the document's actual page, which the preview image (auto-cropped "
+        "to whatever was drawn) will NOT reveal. A .cdxml backup is saved "
         "first; the result includes backup_path and a preview image."))
     def chemdraw_move_objects(moves: list[dict], move_with_captions: bool = True):
         return with_preview(bridge.move_objects(moves, move_with_captions))
@@ -134,11 +142,18 @@ def register(mcp, bridge):
         labels beneath each. items: list like
         [{"object_id": "claude-...", "label": "3a, 85%"}, ...].
         layout: single-column (3.25 in) | double-column (6.5 in), or set
-        page_width_in explicitly; columns=0 auto-fits.
+        page_width_in explicitly; columns=0 auto-fits. Note layout/
+        page_width_in only controls column WRAPPING (a manuscript width),
+        not the actual ChemDraw document page size — enough rows can still
+        run past the bottom of the real page, which is what
+        `violations.off_page` (structure/label ids and which edge(s) they
+        cross) catches; it will NOT show up in the preview image, which
+        auto-crops to whatever was drawn rather than the page boundary.
 
         The response includes a rendered preview image — LOOK AT IT and
         re-invoke with different columns/ordering if anything overlaps, labels
-        wrap awkwardly, or the grid is unbalanced. A document backup is saved
+        wrap awkwardly, or the grid is unbalanced. ALWAYS also check
+        `violations.off_page`. A document backup is saved
         first (backup_path) for rollback."""
         return with_preview(bridge.arrange_grid(
             items, columns or None, layout, page_width_in or None))
@@ -153,9 +168,24 @@ def register(mcp, bridge):
         [{"representation": "c1ccccc1", "format": "smiles", "label": "1a, 92%"}, ...]
         (format defaults to smiles; also accepts name/molfile/inchi).
 
+        A representation that inserts as more than one disconnected
+        ChemDraw object (a salt like "[K+].[O-]C(=O)[O-].[K+]", or a
+        name-resolved organometallic like "PdCl2(PPh3)2") still counts as
+        ONE table entry/grid cell, with ONE label -- its fragments are kept
+        together (moved as a rigid group, not each independently snapped
+        to the cell) and carry ONE caption, tagged to the first fragment.
+        object_ids reports that first fragment's id per entry; the full
+        per-entry breakdown (every fragment's id, len 1 for an ordinary
+        single-object entry) is in the parallel fragment_ids, for the rare
+        case you need to address every ion/ligand individually afterward
+        (e.g. chemdraw_select or chemdraw_transform on just one of them).
+
         The response includes a rendered preview image — LOOK AT IT and
-        re-invoke or rearrange if anything is off. A document backup is saved
-        first (backup_path)."""
+        re-invoke or rearrange if anything is off. ALWAYS also check
+        `violations.off_page`: enough entries can run the grid past the
+        bottom of the document's actual page even though the preview image
+        (auto-cropped to whatever was drawn) looks fine. A document backup
+        is saved first (backup_path)."""
         return with_preview(bridge.build_scope_table(
             entries, columns or None, layout, page_width_in or None))
 

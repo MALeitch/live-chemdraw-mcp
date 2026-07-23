@@ -28,3 +28,17 @@ def register(mcp, bridge):
                                  display: str) -> str:
         return as_json(bridge.set_bond_stereo(_parse(target), bond_index,
                                               display))
+
+    @mcp.tool(description=(
+        "Set the \"and1\"/\"or1\" relative-stereo grouping notation on one "
+        "atom -- used to report a single diastereomer out of a mixture "
+        "(as opposed to get/set_bond_stereo's absolute R/S wedge/hash "
+        "geometry). enhanced_type: unspecified | none | absolute | or | "
+        "and. group_number: which and/or group this atom belongs to (e.g. "
+        "group_number=1 for \"and1\"); ignored for absolute/none. "
+        "atom_index accepts either a 1-based position or a stable ref from "
+        "chemdraw_list_atoms. " + TARGET_DOC))
+    def chemdraw_set_enhanced_stereo(target: str, atom_index: int | str,
+                                     enhanced_type: str, group_number: int = 0) -> str:
+        return as_json(bridge.set_enhanced_stereo(
+            _parse(target), atom_index, enhanced_type, group_number))

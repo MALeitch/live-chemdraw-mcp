@@ -16,6 +16,7 @@ package. No method name is duplicated across any two mixins (that's what
 makes this safe) — see tests/ for a completeness check against this
 invariant if one is ever added.
 """
+from ._annotations import _Annotations
 from ._document_session import _DocumentSession
 from ._enumeration import _Enumeration
 from ._layout import _Layout
@@ -25,8 +26,10 @@ from ._properties_qc import _PropertiesQC
 from ._reaction import _Reaction
 from ._selection import _Selection
 from ._shorthand import _Shorthand
+from ._specialty_objects import _SpecialtyObjects
 from ._state_diff import _StateDiff
 from ._stereochemistry import _Stereochemistry
+from ._stoichiometry import _Stoichiometry
 from ._structure_io import _StructureIO
 from ._style import _Style
 
@@ -34,7 +37,8 @@ from ._style import _Style
 class ChemDrawBridge(_Plumbing, _DocumentSession, _Selection, _StateDiff,
                      _StructureIO, _PropertiesQC, _Manipulation,
                      _Stereochemistry, _Shorthand, _Layout, _Style,
-                     _Reaction, _Enumeration):
+                     _Reaction, _Enumeration, _Annotations, _SpecialtyObjects,
+                     _Stoichiometry):
     """See the module docstring above. Only _Plumbing may define __init__ —
     it's the sole owner of self._conn/_worker/_caches/_last_backup/_doc_name.
     A future mixin that adds its own __init__ without calling

@@ -301,6 +301,48 @@ def test_build_canvas_reports_overlaps():
     assert out["violations"]["overlapping_structures"] == [["a", "b"]]
 
 
+def test_build_canvas_off_page_requires_page_size():
+    # without page_width/page_height, the check is skipped entirely --
+    # confirmed nowhere else in the codebase compared drawn bounds against
+    # the document's real page before this
+    units = [_structure("a", _b(500, 500, 600, 600))]
+    out = canvas.build_canvas(units, [], [])
+    assert out["violations"]["off_page"] == []
+    assert out["page_bounds"] is None
+
+
+def test_build_canvas_reports_off_page():
+    units = [_structure("a", _b(10, 10, 60, 60)),  # fully on-page
+             _structure("b", _b(500, 10, 600, 60))]  # pokes past the right edge
+    out = canvas.build_canvas(units, [], [], page_width=540.0, page_height=720.0)
+    assert out["page_bounds"] == {"width": 540.0, "height": 720.0}
+    assert out["violations"]["off_page"] == [{"id": "b", "edges": ["right"]}]
+
+
+def test_build_canvas_off_page_includes_captions():
+    # A structure comfortably on-page can still have its caption run past
+    # the real page edge underneath it (captions sit below their
+    # structure's bottom edge by this codebase's own convention) --
+    # checking structure bounds alone must not report a false "clean"
+    # off_page result.
+    units = [_structure("a", _b(10, 690, 60, 715))]  # structure itself on-page
+    captions = [{"text": "1a", "bounds": _b(15, 718, 45, 728),  # past bottom (720)
+                "group_id": None, "tag_owner_id": "a"}]
+    out = canvas.build_canvas(units, captions, [], page_width=540.0, page_height=720.0)
+    assert out["violations"]["off_page"] == [{"id": "a (caption)", "edges": ["bottom"]}]
+
+
+def test_build_canvas_off_page_caption_without_owner_still_reported():
+    # An unowned/unassociated caption must still be checked -- it can't be
+    # tagged with a structure id, so it falls back to identifying itself
+    # by text instead of silently being skipped.
+    captions = [{"text": "stray note", "bounds": _b(15, 718, 45, 728),
+                "group_id": None, "tag_owner_id": None}]
+    out = canvas.build_canvas([], captions, [], page_width=540.0, page_height=720.0)
+    assert out["violations"]["off_page"] == [
+        {"id": "caption 'stray note'", "edges": ["bottom"]}]
+
+
 def test_build_canvas_region_scopes_to_panel():
     units, captions, boxes = _figure()
     region = canvas.resolve_region({"box_index": 2}, boxes)

@@ -81,6 +81,21 @@ def split_atoms(atom_ids, bonds, bond_atom1_id, bond_atom2_id, side_atom_id):
             "bond removed, so there is no single 'side' to select."
         )
 
+    if bond_atom1_id not in visited and bond_atom2_id not in visited:
+        # side_atom_id's own connected component never reaches either
+        # endpoint of the bond being split -- e.g. side_atom_id sits in a
+        # separate fragment of a multi-fragment unit (a salt's
+        # counterion). Without this check the BFS above would silently
+        # return that unrelated fragment as "the side", with no bonds
+        # tying it to the requested split point.
+        raise ValueError(
+            f"side_atom_id {side_atom_id!r} is not connected to bond "
+            f"{bond_atom1_id!r}-{bond_atom2_id!r} by any path -- they may "
+            "be in different disconnected fragments of this structure "
+            "(e.g. a salt's ion pair). Pick a side_atom_id that is "
+            "actually part of the fragment containing the bond to split."
+        )
+
     bond_ids = [
         token for token, a, b in bonds if a in visited and b in visited
     ]

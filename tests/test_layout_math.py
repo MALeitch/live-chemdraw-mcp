@@ -1,7 +1,7 @@
 from chemdraw_connector.domain.layout_math import (
     Box, arrow_length_for_reagents, caption_anchor, choose_columns,
-    distribute_vertical, find_overlaps, grid_positions, page_width_points,
-    plan_reaction_layout, shelf_pack,
+    distribute_vertical, find_overlaps, grid_positions, page_overflow,
+    page_width_points, plan_reaction_layout, shelf_pack,
 )
 
 
@@ -236,6 +236,42 @@ def test_plan_reaction_layout_wide_structure_pushes_downstream_positions():
     assert arrow_left_wide - arrow_left_narrow == 500.0 - 10.0
     assert (product_positions_w[0][0] - product_positions_n[0][0]
             == 500.0 - 10.0)
+
+
+def test_page_overflow_ignores_boxes_fully_on_page():
+    boxes = [Box(0, 0, 50, 50), Box(400, 600, 500, 700)]
+    assert page_overflow(boxes, ["a", "b"], 540.0, 720.0) == []
+
+
+def test_page_overflow_detects_each_edge():
+    boxes = [
+        Box(-20, 10, 30, 60),      # crosses left
+        Box(10, -20, 60, 30),      # crosses top
+        Box(500, 10, 600, 60),     # crosses right (page width 540)
+        Box(10, 680, 60, 760),     # crosses bottom (page height 720)
+    ]
+    ids = ["left", "top", "right", "bottom"]
+    hits = {h["id"]: h["edges"] for h in page_overflow(boxes, ids, 540.0, 720.0)}
+    assert hits == {
+        "left": ["left"], "top": ["top"],
+        "right": ["right"], "bottom": ["bottom"],
+    }
+
+
+def test_page_overflow_detects_multiple_edges_at_once():
+    # a box near the bottom-right corner, well past both edges
+    boxes = [Box(520, 700, 600, 800)]
+    hits = page_overflow(boxes, ["corner"], 540.0, 720.0)
+    assert hits == [{"id": "corner", "edges": ["right", "bottom"]}]
+
+
+def test_page_overflow_respects_slop():
+    # 0.5pt past the edge, well within the default 1.0pt slop
+    boxes = [Box(10, 10, 540.5, 60)]
+    assert page_overflow(boxes, ["a"], 540.0, 720.0) == []
+    # same box, tighter slop now catches it
+    assert page_overflow(boxes, ["a"], 540.0, 720.0, slop=0.1) == [
+        {"id": "a", "edges": ["right"]}]
 
 
 def test_plan_reaction_layout_no_plus_signs_for_single_groups():

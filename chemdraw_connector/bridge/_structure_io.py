@@ -4,6 +4,7 @@ import base64
 
 from .. import targets
 from ..com import types as t
+from ..domain import layout_math
 from ..errors import ChemDrawError
 from ._plumbing import SLOW_TIMEOUT, _com_bytes, _com_text
 
@@ -16,13 +17,33 @@ class _StructureIO:
             doc = self._doc()
             units = self._insert_structure_units(doc, representation, fmt)
             if position and units:
+                # A multi-fragment payload (a salt, a name-resolved
+                # organometallic like PdCl2(PPh3)2) returns more than one
+                # unit here -- one real ChemDraw Group per disconnected
+                # fragment (see _drop_wrapper_groups). Recentering EACH
+                # fragment onto the same (x, y) individually (the old
+                # behavior) stacked every ion/ligand exactly on top of each
+                # other at one point -- confirmed live as the cause of
+                # "all placed at identical/overlapping coordinates".
+                # Instead, move the whole assembly by ONE shared delta so
+                # ChemDraw's own relative placement between fragments (the
+                # same spacing plan_reaction_layout's intra_group_gap
+                # exists to preserve for reaction schemes) survives intact.
                 x, y = position
+                left = min(u.Left for u in units)
+                top = min(u.Top for u in units)
+                right = max(u.Right for u in units)
+                bottom = max(u.Bottom for u in units)
+                dx = x - (left + right) / 2.0
+                dy = y - (top + bottom) / 2.0
                 for u in units:
-                    objs = targets.unit_objects(u)
-                    cx = (u.Left + u.Right) / 2.0
-                    cy = (u.Top + u.Bottom) / 2.0
-                    objs.Move(x - cx, y - cy)
-            return {"inserted": self._describe_units(doc, units)}
+                    targets.unit_objects(u).Move(dx, dy)
+            ids = [targets.ensure_id(u) for u in units]
+            off_page = layout_math.page_overflow(
+                [layout_math.Box(u.Left, u.Top, u.Right, u.Bottom) for u in units],
+                ids, float(doc.Width or 540.0), float(doc.Height or 720.0))
+            return {"inserted": self._describe_units(doc, units),
+                    "off_page": off_page}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
     def export_structure(self, fmt="molfile", target="selection"):
@@ -40,7 +61,8 @@ class _StructureIO:
             return {"format": fmt, "structures": out}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
-    def export_image(self, fmt="png", target="selection", path=None, dpi=300):
+    def export_image(self, fmt="png", target="selection", path=None, dpi=300,
+                     overwrite=False):
         def go():
             doc = self._doc()
             mime = t.mime_for(fmt)
@@ -71,6 +93,7 @@ class _StructureIO:
             if not data:
                 raise ChemDrawError(f"ChemDraw returned no {fmt} data")
             if path:
+                self._guard_write_path(path, overwrite)
                 with open(path, "wb") as fh:
                     fh.write(data)
                 return {"path": path, "bytes": len(data)}

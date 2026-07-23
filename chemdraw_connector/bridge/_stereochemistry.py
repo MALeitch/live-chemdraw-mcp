@@ -35,6 +35,35 @@ class _Stereochemistry:
             return {"stereochemistry": out}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
+    def set_enhanced_stereo(self, target, atom_index, enhanced_type, group_number=0):
+        """Set the "and1"/"or1" relative-stereo grouping notation on one
+        atom -- used for reporting a single diastereomer out of a mixture.
+
+        enhanced_type: unspecified | none | absolute | or | and.
+        group_number: which "and"/"or" group this atom belongs to (e.g.
+        group_number=1 for "and1"); ignored for "absolute"/"none".
+
+        Found live directly on IChemDrawAtom (EnhancedStereoType +
+        EnhancedStereoGroupNumber), confirmed settable — a per-atom
+        property, not a document- or bond-level concept."""
+        enhanced_val = t.enhanced_stereo_type_value(enhanced_type)
+
+        def go():
+            doc = self._doc()
+            cache = self._cache_for(doc)
+            unit = targets.resolve(doc, target, cache)[0]
+            atom, idx = targets.resolve_atom(doc, unit, atom_index, cache)
+            atom.EnhancedStereoType = enhanced_val
+            atom.EnhancedStereoGroupNumber = group_number
+            return {
+                "id": targets.ensure_id(unit),
+                "atom_index": idx,
+                "ref": targets.atom_ref(atom),
+                "enhanced_type": t.enhanced_stereo_type_name(atom.EnhancedStereoType),
+                "group_number": atom.EnhancedStereoGroupNumber,
+            }
+        return self._run(go, timeout=SLOW_TIMEOUT)
+
     def set_bond_stereo(self, target, bond_index, display):
         display_val = t.bond_display_value(display)
 

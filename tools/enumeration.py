@@ -31,8 +31,10 @@ def register(mcp, bridge):
             properties or ["mw", "formula"]))
 
     @mcp.tool()
-    def chemdraw_export_data_table(rows: list[dict], path: str) -> str:
+    def chemdraw_export_data_table(rows: list[dict], path: str,
+                                   overwrite: bool = False) -> str:
         """Write tabular results to a CSV file (Excel-friendly). rows:
         list of objects, e.g. the derivatives array from
-        chemdraw_enumerate_derivatives."""
-        return as_json(bridge.export_data_table(rows, path))
+        chemdraw_enumerate_derivatives. Refuses to overwrite an existing
+        file at `path` unless overwrite=true."""
+        return as_json(bridge.export_data_table(rows, path, overwrite=overwrite))

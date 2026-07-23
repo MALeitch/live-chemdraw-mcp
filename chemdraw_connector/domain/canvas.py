@@ -20,6 +20,12 @@ CAPTION_MAX_GAP_PT = 60.0
 # within this radius. Beyond it, a caption is reported unowned rather than
 # guessed at.
 CAPTION_MAX_DISTANCE_PT = 120.0
+# Sentinel tag_owner_id value meaning "explicitly no owner" (a reaction
+# scheme's own reagents-text/"+"/arrow-fallback captions -- see
+# targets.NO_CAPTION_OWNER, which this must stay in sync with; this module
+# stays free of any COM/targets import by design, see the module
+# docstring, so the literal is duplicated here rather than imported).
+NO_CAPTION_OWNER_SENTINEL = "__no_owner__"
 # How far past a box edge counts as overflowing it (drawing slop is common).
 OVERFLOW_SLOP_PT = 2.0
 # Bounds-containment slop for wrapper-duplicate detection.
@@ -168,7 +174,16 @@ def associate_captions(structures, captions, wrapper_map=None,
     """For each caption, the id of the structure it labels (or None).
 
     Preference order:
-    0. The caption carries a `tag_owner_id` (bridge._add_caption_to_unit /
+    0a. The caption carries tag_owner_id == NO_CAPTION_OWNER_SENTINEL
+        (targets.NO_CAPTION_OWNER — stamped on a reaction scheme's own
+        reagents-text/"+"/arrow-fallback captions, which describe the
+        WHOLE reaction rather than any one reactant/product) -> owned by
+        nothing, final answer, never falls through to the spatial tiers.
+        Confirmed live as a real gap before this existed: an untagged
+        reagents caption sitting just above a product structure got
+        matched to that product by tier 5 (nearest center) as if it were
+        the product's own label.
+    0b. The caption carries a `tag_owner_id` (bridge._add_caption_to_unit /
        targets.tag_caption_owner's claude_caption_owner object tag) that
        resolves to a real structure or a wrapper duplicate of one -> use it
        directly. This is the reliable tier for every caption THIS
@@ -216,6 +231,9 @@ def associate_captions(structures, captions, wrapper_map=None,
     out = []
     for c in captions:
         tag_owner = c.get("tag_owner_id")
+        if tag_owner == NO_CAPTION_OWNER_SENTINEL:
+            out.append(None)
+            continue
         if tag_owner is not None:
             if tag_owner in ids:
                 out.append(tag_owner)
@@ -372,7 +390,8 @@ def resolve_region(region, boxes):
     return {k: float(region[k]) for k in ("left", "top", "right", "bottom")}
 
 
-def build_canvas(units, captions, boxes, region=None):
+def build_canvas(units, captions, boxes, region=None,
+                 page_width=None, page_height=None):
     """Assemble the one-call semantic picture of a page.
 
     units/captions/boxes: the plain dicts bridge gathers (see module
@@ -380,7 +399,15 @@ def build_canvas(units, captions, boxes, region=None):
     structures whose center falls inside it (their captions come along even
     if the caption itself pokes out), boxes that intersect it, and captions
     that are inside it or owned by a kept structure.
-    """
+
+    page_width/page_height: the document's actual page extent (doc.Width/
+    doc.Height), both required together to enable `violations.off_page` --
+    structures whose bounds fall outside [0,0]..(page_width, page_height).
+    Without this, nothing anywhere ever compared drawn content against the
+    real page: overflowing_box only catches a structure escaping a panel
+    BOX, not the page itself, and the preview image auto-crops to whatever
+    was drawn so it can't show a page edge either. Omit to skip the check
+    entirely (e.g. callers with no reliable page size)."""
     real, wrapper_map, others = classify_units(units)
     owner_ids = associate_captions(real, captions, wrapper_map,
                                    {u["id"] for u in others}, boxes)
@@ -448,10 +475,34 @@ def build_canvas(units, captions, boxes, region=None):
         [layout_math.Box(**s["bounds"]) for s in with_bounds],
         ids=[s["id"] for s in with_bounds])
 
+    off_page = []
+    if page_width is not None and page_height is not None:
+        # Captions sit ~12pt below their structure's bottom edge by this
+        # codebase's own convention (fix_caption_gaps/caption_anchor) --
+        # a structure that's comfortably on-page can still have its
+        # caption's text run past the real page edge underneath it, which
+        # checking structure bounds alone would never catch even though
+        # it's exactly the "content past the page edge" case this check
+        # exists for.
+        off_page_boxes = [layout_math.Box(**s["bounds"]) for s in with_bounds]
+        off_page_ids = [s["id"] for s in with_bounds]
+        for c in captions_out:
+            if not c.get("bounds"):
+                continue
+            off_page_boxes.append(layout_math.Box(**c["bounds"]))
+            owner = c.get("structure_id")
+            off_page_ids.append(
+                f"{owner} (caption)" if owner else f"caption {c.get('text', '')!r}")
+        off_page = layout_math.page_overflow(
+            off_page_boxes, off_page_ids, page_width, page_height)
+
     return {
         "structures": structures_out,
         "captions": captions_out,
         "boxes": boxes_out,
+        "page_bounds": ({"width": page_width, "height": page_height}
+                        if page_width is not None and page_height is not None
+                        else None),
         "non_structure_units": [
             {"id": u["id"],
              "note": "no atoms — an empty/decoration group (box frame or "
@@ -467,5 +518,6 @@ def build_canvas(units, captions, boxes, region=None):
         "violations": {
             "overlapping_structures": [list(p) for p in overlaps],
             "overflowing_box": overflowing,
+            "off_page": off_page,
         },
     }

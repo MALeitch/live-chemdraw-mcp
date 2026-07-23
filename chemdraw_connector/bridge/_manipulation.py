@@ -175,21 +175,69 @@ class _Manipulation:
                 }
 
             units = targets.resolve(doc, target, cache)
+            transformed, failed = [], []
             for u in units:
-                self._apply_transform_action(
-                    targets.unit_objects(u), action, dx, dy, degrees, factor, vertical)
-            return {"transformed": [targets.ensure_id(u) for u in units],
+                uid = targets.ensure_id(u)
+                try:
+                    self._apply_transform_action(
+                        targets.unit_objects(u), action, dx, dy, degrees,
+                        factor, vertical)
+                    transformed.append(uid)
+                except Exception as exc:
+                    # One unit's Clean()/Rotate()/etc. failing must not
+                    # abort a multi-id batch and discard whatever earlier
+                    # units already transformed — same per-item isolation
+                    # as edit_atoms/edit_bonds/remove.
+                    failed.append({"id": uid, "error": str(exc)})
+            return {"transformed": transformed, "failed": failed,
                     "action": action}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
     def remove(self, target):
         def go():
             doc = self._doc()
-            units = targets.resolve(doc, target, self._cache_for(doc))
-            ids = [targets.ensure_id(u) for u in units]
-            for u in units:
-                targets.unit_objects(u).Clear()
-            return {"removed": ids}
+            cache = self._cache_for(doc)
+            if target in ("document", "selection"):
+                units = targets.resolve(doc, target, cache)
+                removed, failed = [], []
+                for u in units:
+                    uid = targets.ensure_id(u)
+                    try:
+                        targets.unit_objects(u).Clear()
+                        removed.append(uid)
+                    except Exception as exc:
+                        # ChemDraw's own group relationships can cascade a
+                        # removal onto another unit in this same batch (e.g.
+                        # a salt's counterion auto-clearing with its cation,
+                        # see move_objects' docstring for the analogous
+                        # "moved for free" case) -- that must not abort the
+                        # whole call and hide which units already got
+                        # removed before it.
+                        failed.append({"id": uid, "error": str(exc)})
+                return {"removed": removed, "failed": failed}
+
+            # An explicit id (or list of ids) may name a real structure OR
+            # a free-floating annotation (caption, arrow, symbol, bracket,
+            # tlc_plate) -- unlike "document"/"selection" (always
+            # structures only, by design), a single/explicit target is
+            # exactly the case that used to leave a bad caption or TLC
+            # plate permanently stuck: targets.resolve/find_by_id only
+            # ever searched structure units, so there was no id space an
+            # orphaned annotation could even be addressed through. See
+            # targets.find_removable_by_id.
+            ids = target if isinstance(target, (list, tuple)) else [target]
+            removed, failed = [], []
+            for oid in ids:
+                try:
+                    kind, obj = targets.find_removable_by_id(doc, oid, cache)
+                    if kind == "structure":
+                        targets.unit_objects(obj).Clear()
+                    else:
+                        obj.Delete()
+                    removed.append(oid)
+                except Exception as exc:
+                    failed.append({"id": oid, "error": str(exc)})
+            return {"removed": removed, "failed": failed}
         return self._run(go)
 
     def list_atoms_bonds(self, target="selection"):
@@ -212,6 +260,7 @@ class _Manipulation:
                         "atom_index": i,
                         "element": t.element_symbol(a.ElementNumber),
                         "charge": a.Charge,
+                        "isotope": a.Isotope or None,
                         "x": round(pos.X, 2),
                         "y": round(pos.Y, 2),
                         "warning": a.ChemicalWarning or None,
@@ -238,31 +287,65 @@ class _Manipulation:
     def _apply_atom_edit(doc, cache, edit):
         """One atom edit, shared by edit_atom and edit_atoms so both stay
         in lockstep. `edit`: {"target", "atom" (ref or 1-based index),
-        "element"?, "charge"?, "set_charge"?}. Raises on an unresolvable
-        target/atom — edit_atom lets that propagate as before, edit_atoms
-        catches it per-item so one bad entry doesn't fail the whole batch."""
+        "element"?, "charge"?, "set_charge"?, "isotope"?, "set_isotope"?}.
+        Raises on an unresolvable target/atom — edit_atom lets that
+        propagate as before, edit_atoms catches it per-item so one bad
+        entry doesn't fail the whole batch.
+
+        isotope is a plain mass-number int (e.g. 13 for 13C, 2 for D),
+        gated by set_isotope the same way charge is gated by set_charge —
+        confirmed live that Atom.Isotope survives export as real isotope
+        notation (SMILES `[13CH2]`, molfile `M  ISO` block), not just a
+        ChemDraw-display-only label."""
         unit = targets.resolve(doc, edit["target"], cache)[0]
         atom, idx = targets.resolve_atom(doc, unit, edit["atom"], cache)
         if edit.get("element"):
             atom.ElementNumber = t.element_number(edit["element"])
         if edit.get("set_charge"):
             atom.Charge = edit.get("charge", 0)
+        if edit.get("set_isotope"):
+            # KNOWN LIMITATION, confirmed live, not solved here: writing
+            # Isotope = 0 is silently rejected (readback keeps the prior
+            # nonzero value, no exception) when the atom's current isotope
+            # is already nonzero -- reproduced deterministically 5/5
+            # attempts, not a transient flake. This is not isotope-specific:
+            # Atom.Charge has the exact same "explicit 0 rejected when
+            # already nonzero" behavior (confirmed live), so it looks like
+            # a general ChemDraw COM quirk treating a literal 0 write as a
+            # no-op/unset sentinel rather than a real assignment. A negative
+            # value DOES get accepted and clamps to 0 (confirmed: -1 -> 0)
+            # -- but going through it is NOT safe: confirmed live that
+            # `Isotope = -1` also corrupts the SAME atom's Charge to -1 as
+            # a side effect (reproduced on a fresh, never-charged atom),
+            # and the corrupted Charge could not then be fixed back to 0
+            # either (same 0-from-nonzero rejection, recursively). Rather
+            # than chase an increasingly risky workaround that trades one
+            # data-corruption bug for another, this writes the requested
+            # value plainly and reports the REAL post-write value (already
+            # done below via a fresh `atom.Isotope` read) so a caller can
+            # see honestly whether a reset actually landed, instead of a
+            # workaround silently claiming success while corrupting charge.
+            atom.Isotope = edit.get("isotope", 0)
         return {
             "id": targets.ensure_id(unit),
             "atom_index": idx,
             "ref": targets.atom_ref(atom),
             "element": t.element_symbol(atom.ElementNumber),
             "charge": atom.Charge,
+            "isotope": atom.Isotope or None,
             "warning": atom.ChemicalWarning or None,
         }
 
-    def edit_atom(self, target, atom_index, element=None, charge=None):
+    def edit_atom(self, target, atom_index, element=None, charge=None, isotope=None):
         edit = {"target": target, "atom": atom_index}
         if element is not None:
             edit["element"] = element
         if charge is not None:
             edit["set_charge"] = True
             edit["charge"] = charge
+        if isotope is not None:
+            edit["set_isotope"] = True
+            edit["isotope"] = isotope
 
         def go():
             doc = self._doc()

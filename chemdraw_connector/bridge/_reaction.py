@@ -9,7 +9,7 @@ _POSITION_TOLERANCE = 0.5  # points; see the verify-and-correct step below
 
 class _Reaction:
     def make_reaction_scheme(self, reactants, products, reagents_text=None,
-                             fmt="smiles"):
+                             fmt="smiles", conditions_text=None):
         """Insert -> plan -> move -> annotate, in that strict order (four
         separate passes, not interleaved). Confirmed live: an earlier
         version that inserted each structure and moved it immediately,
@@ -65,6 +65,17 @@ class _Reaction:
         so the reagents caption is now constructed as CDXML instead of a
         plain MakeCaption()+.Text= call. See domain/reagent_text.py for
         which digits get treated as formula subscripts.
+
+        conditions_text: standard single-step-scheme convention (ACS
+        style and similar) is reagents/catalysts ABOVE the arrow,
+        solvent/temperature/time/other physical conditions (wavelength,
+        microwave, pressure...) BELOW it -- reagents_text and
+        conditions_text map directly onto that split; pass both for a
+        two-line arrow annotation, or reagents_text alone for the
+        original single-line-above behavior. Both go through the exact
+        same subscript-run/measure-real-width/verify-and-correct
+        machinery described above, and the arrow's reserved space grows
+        to fit whichever of the two is wider, not just reagents_text.
         """
         reactants = [self._validate_input(r, fmt) for r in reactants]
         products = [self._validate_input(p, fmt) for p in products]
@@ -83,20 +94,19 @@ class _Reaction:
             product_units = [self._insert_structure_units(doc, p, fmt)
                              for p in products]
 
-            # Phase 1b: create the reagents-text caption now (if any),
-            # purely to measure its real rendered width up front -- needed
-            # both to center it later (see docstring) and to size the
-            # arrow's reserved space around it (CleanRXN+'s auto-width
-            # rule). Reused in phase 4 rather than recreated. Built as
-            # CDXML (see docstring) so formula-subscript digits get real
-            # ChemDraw text formatting, not a Unicode-character
-            # substitute. Falls back to a plain caption if that insertion
-            # doesn't take for any reason -- the reagents text must never
-            # just silently disappear.
-            reagents_cap = None
-            reagents_width = 0.0
-            if reagents_text:
-                runs = split_subscript_runs(reagents_text)
+            # Phase 1b: create the reagents-text AND conditions-text
+            # captions now (if given), purely to measure their real
+            # rendered widths up front -- needed both to center them later
+            # (see docstring) and to size the arrow's reserved space
+            # around them (CleanRXN+'s auto-width rule, now driven by
+            # whichever of the two is wider). Reused in phase 4 rather
+            # than recreated. Built as CDXML (see docstring) so
+            # formula-subscript digits get real ChemDraw text formatting,
+            # not a Unicode-character substitute. Falls back to a plain
+            # caption if that insertion doesn't take for any reason -- the
+            # text must never just silently disappear.
+            def _make_annotation_caption(text):
+                runs = split_subscript_runs(text)
                 cdxml = build_text_cdxml(runs, x=0, y=0, width=500, height=14)
                 caps_before = doc.Captions.Count
                 try:
@@ -104,15 +114,33 @@ class _Reaction:
                 except Exception:
                     pass
                 if doc.Captions.Count > caps_before:
-                    reagents_cap = doc.Captions.Item(doc.Captions.Count)
+                    cap = doc.Captions.Item(doc.Captions.Count)
                 else:
-                    reagents_cap = doc.MakeCaption()
-                    reagents_cap.Text = reagents_text
+                    cap = doc.MakeCaption()
+                    cap.Text = text
                 try:
-                    reagents_width = reagents_cap.Right - reagents_cap.Left
+                    width = cap.Right - cap.Left
                 except Exception:
-                    reagents_width = 0.0
-            arrow_len = layout_math.arrow_length_for_reagents(reagents_width)
+                    width = 0.0
+                # Describes the WHOLE reaction, not any one reactant/
+                # product -- without this, canvas.associate_captions'
+                # spatial fallback can (and did, confirmed live) match it
+                # to whichever structure happens to sit nearest, mislabeling
+                # it as that structure's own caption.
+                try:
+                    targets.tag_caption_owner(cap, targets.NO_CAPTION_OWNER)
+                except Exception:
+                    pass
+                return cap, width
+
+            reagents_cap = reagents_width = None
+            if reagents_text:
+                reagents_cap, reagents_width = _make_annotation_caption(reagents_text)
+            conditions_cap = conditions_width = None
+            if conditions_text:
+                conditions_cap, conditions_width = _make_annotation_caption(conditions_text)
+            arrow_len = layout_math.arrow_length_for_reagents(
+                max(reagents_width or 0.0, conditions_width or 0.0))
 
             # Phase 2: plan every x position from each unit's width alone
             # (widths are stable right after insertion even though
@@ -205,6 +233,15 @@ class _Reaction:
                     w = 0.0
                 if not _place_and_verify(cap, center_x - w / 2.0, center_y):
                     mislaid.append(label)
+                # A "+" or the arrow-fallback "->" glyph, not a label for
+                # either structure it sits between -- see reagents_cap's
+                # tagging above for why an untagged decoration caption is
+                # unsafe (spatial fallback can mislabel it as whichever
+                # structure happens to sit nearest).
+                try:
+                    targets.tag_caption_owner(cap, targets.NO_CAPTION_OWNER)
+                except Exception:
+                    pass
                 return cap
 
             decorations = []  # (label, obj) for every non-structure element,
@@ -213,10 +250,20 @@ class _Reaction:
             # "not clean" as two structures colliding.
             for i, px in enumerate(plus_positions):
                 label = f"+{i}"
-                decorations.append((label, place_centered_caption(label, "+", px, y)))
+                # plus_positions holds the LEFT edge of each reserved
+                # plus_width-wide slot (layout_math.plan_reaction_layout
+                # appends x before advancing it by plus_width), not a
+                # center -- place_centered_caption expects a true center,
+                # so the slot's own center is px + plus_width / 2. Passing
+                # px directly here previously landed every "+" shifted
+                # left by half the slot width.
+                plus_center_x = px + plus_width / 2.0
+                decorations.append(
+                    (label, place_centered_caption(label, "+", plus_center_x, y)))
 
             arrow_center_x = arrow_left_x + arrow_len / 2.0
             arrow_ok = False
+            arrow_id = None
             try:
                 arrow = doc.MakeArrow()
                 # Confirmed live: Position (like Caption.Position) is NOT
@@ -239,6 +286,12 @@ class _Reaction:
                 start_pt.X, start_pt.Y = arrow_left_x + arrow_len, y
                 arrow.Start = start_pt
                 arrow_ok = True
+                # Tagged (like every structure unit) so a plain scheme
+                # arrow can be found again afterward via
+                # chemdraw_set_arrow_style/chemdraw_list_arrows (targets.
+                # ensure_id works on any IChemDrawObject, already proven
+                # live on Caption -- see targets.tag_caption_owner).
+                arrow_id = targets.ensure_id(arrow)
                 decorations.append(("arrow", arrow))
             except Exception:
                 decorations.append(
@@ -253,6 +306,20 @@ class _Reaction:
                                          y - 24.0):
                     mislaid.append("reagents_text")
                 decorations.append(("reagents_text", reagents_cap))
+
+            if conditions_cap is not None:
+                try:
+                    w = conditions_cap.Right - conditions_cap.Left
+                except Exception:
+                    w = conditions_width
+                # Mirrors reagents_text's y - 24.0 on the other side of the
+                # arrow (standard single-step-scheme convention: reagents
+                # above, conditions -- solvent/temp/time/special conditions
+                # like wavelength or microwave -- below).
+                if not _place_and_verify(conditions_cap, arrow_center_x - w / 2.0,
+                                         y + 24.0):
+                    mislaid.append("conditions_text")
+                decorations.append(("conditions_text", conditions_cap))
 
             # Verify the whole scheme, not just trust the layout math: read
             # every placed element's FINAL bounds (structures, arrow, every
@@ -273,12 +340,17 @@ class _Reaction:
                 except Exception:
                     continue
             overlaps = layout_math.find_overlaps(boxes, ids=labels)
+            off_page = layout_math.page_overflow(
+                boxes, labels,
+                float(doc.Width or 540.0), float(doc.Height or 720.0))
 
             return {
                 "object_ids": ids,
                 "arrow_native": arrow_ok,
+                "arrow_object_id": arrow_id,
                 "violations": {"overlapping": [list(p) for p in overlaps],
-                                "mislaid_captions": mislaid},
+                                "mislaid_captions": mislaid,
+                                "off_page": off_page},
                 "backup_path": backup,
                 "preview_png_base64": self._preview_png(doc),
             }

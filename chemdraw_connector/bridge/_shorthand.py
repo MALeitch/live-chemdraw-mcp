@@ -351,7 +351,15 @@ class _Shorthand:
                         note = step["note"]
                     contracted.extend(step.get("contracted", []))
                     if not step.get("any_contracted") or step.get("new_id") is None:
-                        current_uid = step.get("new_id", current_uid)
+                        # dict.get's default only fires when the key is
+                        # ABSENT, not when it's present with value None
+                        # (the "couldn't re-identify the structure" case
+                        # from _reresolve_after_mutation) -- that used to
+                        # discard the last known-good id here even though
+                        # nothing about it actually became invalid.
+                        new_id = step.get("new_id")
+                        if new_id is not None:
+                            current_uid = new_id
                         break
                     current_uid, current_unit = step["new_id"], None  # force re-resolve next round
                     if len(contracted) >= self._MAX_CONTRACTIONS_PER_UNIT:

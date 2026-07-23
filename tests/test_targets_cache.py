@@ -175,6 +175,42 @@ def test_iter_units_three_way_collision_all_get_distinct_ids():
     assert len(ids) == len(set(ids)) == 3
 
 
+def test_iter_units_retags_duplicate_top_level_fragment_tag():
+    # Simulates copy/paste of an ungrouped, hand-drawn structure: no Group
+    # wraps either copy, so both are only found via the atom->Fragment
+    # walk. A tag collision here must be retagged the same way a
+    # colliding Group is above, not silently dropped as "this fragment's
+    # tag is inherited from a group we already listed" -- there is no
+    # group at all in this scenario, so that read would be wrong and the
+    # second structure would vanish from every id-keyed lookup.
+    frag1 = FakeUnit(101, atom_count=1, bond_count=0)
+    targets.ensure_id(frag1)
+    frag2 = FakeUnit(102, atom_count=1, bond_count=0)
+    frag2._tags["claude_id"] = frag1._tags["claude_id"]
+    atoms = [FakeAtom(frag1), FakeAtom(frag2)]
+    doc = FakeDoc(groups=[], atoms=atoms, bonds=[])
+
+    units = targets.iter_units(doc)
+
+    assert len(units) == 2, "both fragments must be returned, not merged"
+    ids = [targets.get_id(u) for u in units]
+    assert len(ids) == len(set(ids)), "every returned unit must have a distinct id"
+    assert targets.get_id(frag1) == ids[0], "first-seen keeps its original id"
+
+
+def test_iter_units_fragment_covered_by_its_own_group_is_not_retagged():
+    # The expected, benign collision: a Data-inserted structure's own
+    # internal fragment inherits its owning Group's tag (see module
+    # docstring) -- this must still be recognized as "already listed via
+    # the group" and skipped, not mistaken for a duplicate top-level
+    # fragment and retagged.
+    doc, grp = make_doc_with_one_group(atom_count=2, bond_count=1)
+    units = targets.iter_units(doc)
+    assert len(units) == 1
+    assert units[0] is grp
+    assert targets.get_id(grp) == targets.get_id(grp)  # unchanged, no retag
+
+
 def test_iter_units_cache_stays_correct_across_multiple_docs():
     doc_a, grp_a = make_doc_with_one_group(atom_count=2)
     doc_b, grp_b = make_doc_with_one_group(atom_count=3)
