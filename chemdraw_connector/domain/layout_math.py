@@ -132,6 +132,35 @@ def distribute_vertical(item_sizes, container, margin=6.0, min_gap=4.0,
     return positions, round(overflow, 1)
 
 
+def stoichiometry_arrow_span(reactant_right, product_left, gap=24.0):
+    """x-span for chemdraw_make_stoichiometry_table's arrow: horizontally
+    BETWEEN the reactant cluster's rightmost edge and the product
+    cluster's leftmost edge -- not below everything's combined bounding
+    box (that placement is confirmed live to make ChemDraw's own
+    MakeStoichiometryGrid classify every component as a reactant,
+    products included, since none of them then sits on either "side" of
+    the arrow -- see bridge/_stoichiometry.py's module docstring for the
+    full investigation).
+
+    Returns (arrow_left_x, arrow_right_x). Raises ValueError if
+    product_left <= reactant_right (products must already sit to the
+    right of reactants on the canvas -- this function can't fix that,
+    only detect it). The requested gap shrinks gracefully (down to
+    available/3 on each side) rather than raising when the two clusters
+    sit close together, but a positive available span always yields
+    arrow_right_x > arrow_left_x."""
+    available = product_left - reactant_right
+    if available <= 0:
+        raise ValueError(
+            f"product_left ({product_left}) must be greater than "
+            f"reactant_right ({reactant_right}) -- products must sit to "
+            "the right of reactants for ChemDraw to classify them "
+            "correctly."
+        )
+    gap = min(gap, available / 3.0)
+    return reactant_right + gap, product_left - gap
+
+
 def arrow_length_for_reagents(reagents_width, min_len=70.0, padding=20.0):
     """Reserved arrow span for a reaction scheme's reagents/conditions text.
 

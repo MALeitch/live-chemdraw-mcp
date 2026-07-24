@@ -1,7 +1,10 @@
+import pytest
+
 from chemdraw_connector.domain.layout_math import (
     Box, arrow_length_for_reagents, caption_anchor, choose_columns,
     distribute_vertical, find_overlaps, grid_positions, page_overflow,
     page_width_points, plan_reaction_layout, shelf_pack,
+    stoichiometry_arrow_span,
 )
 
 
@@ -156,6 +159,40 @@ def test_distribute_vertical_single_item_centered():
         [(40, 20)], Box(0, 0, 100, 100), margin=10)
     assert overflow == 0.0
     assert positions[0][1] == 40  # (80 inner - 20)/2 + 10 margin
+
+
+def test_stoichiometry_arrow_span_uses_full_gap_when_room_available():
+    left, right = stoichiometry_arrow_span(reactant_right=100.0,
+                                           product_left=300.0)
+    assert left == 124.0   # 100 + 24
+    assert right == 276.0  # 300 - 24
+    assert left < right
+
+
+def test_stoichiometry_arrow_span_shrinks_gap_when_clusters_are_close():
+    # available=30, so the default 24pt gap would invert the arrow;
+    # gap must shrink to available/3 = 10 on each side instead.
+    left, right = stoichiometry_arrow_span(reactant_right=100.0,
+                                           product_left=130.0)
+    assert left == 110.0
+    assert right == 120.0
+    assert left < right
+
+
+def test_stoichiometry_arrow_span_custom_gap():
+    left, right = stoichiometry_arrow_span(reactant_right=0.0,
+                                           product_left=100.0, gap=10.0)
+    assert (left, right) == (10.0, 90.0)
+
+
+def test_stoichiometry_arrow_span_rejects_product_not_right_of_reactant():
+    with pytest.raises(ValueError, match="must sit to the right"):
+        stoichiometry_arrow_span(reactant_right=200.0, product_left=100.0)
+
+
+def test_stoichiometry_arrow_span_rejects_touching_clusters():
+    with pytest.raises(ValueError):
+        stoichiometry_arrow_span(reactant_right=100.0, product_left=100.0)
 
 
 def test_arrow_length_for_reagents_floors_at_min():

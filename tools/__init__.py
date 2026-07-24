@@ -3,6 +3,10 @@ from . import (
     annotations,
     enumeration,
     layout,
+    procedure_characterization,
+    procedure_qc,
+    procedure_reaction,
+    procedure_scope,
     reaction,
     shorthand,
     specialty_objects,
@@ -15,7 +19,8 @@ from . import (
 
 _MODULES = (structure, state, analysis, stereo, shorthand, layout, style,
             reaction, enumeration, annotations, specialty_objects,
-            stoichiometry)
+            stoichiometry, procedure_reaction, procedure_scope,
+            procedure_characterization, procedure_qc)
 
 
 def register_all(mcp, bridge):
