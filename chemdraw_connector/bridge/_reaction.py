@@ -109,6 +109,24 @@ class _Reaction:
                 runs = split_subscript_runs(text)
                 cdxml = build_text_cdxml(runs, x=0, y=0, width=500, height=14)
                 caps_before = doc.Captions.Count
+                # Confirmed live 2026-07-23: when `text` ALONE (the whole
+                # string, not a substring) parses as a chemical name/
+                # formula ChemDraw recognizes -- bare "NaH" or "PCC", but
+                # NOT "NaH (1.10 equiv)" -- this CDXML text-object insert
+                # silently ALSO creates a real one-atom phantom structure
+                # elsewhere on the page, as an unwanted side effect of
+                # whatever auto-recognition ChemDraw's CDXML importer runs
+                # on <t> content. A caption-only insert must never create
+                # real chemistry, so snapshot every addressable unit before
+                # the insert and delete anything new after it -- reuses
+                # targets.iter_units/ensure_id/unit_objects(...).Clear(),
+                # the exact same lookup+delete path chemdraw_remove already
+                # uses for a real structure, rather than reinventing
+                # atom/group bookkeeping here. cache=None forces a fresh
+                # scan on both sides so a phantom created between them is
+                # never masked by a stale doc_signature match.
+                before_ids = {targets.ensure_id(u)
+                             for u in targets.iter_units(doc, None)}
                 try:
                     self._insert_raw(doc.Objects, "text/xml", cdxml)
                 except Exception:
@@ -118,6 +136,12 @@ class _Reaction:
                 else:
                     cap = doc.MakeCaption()
                     cap.Text = text
+                for u in targets.iter_units(doc, None):
+                    if targets.ensure_id(u) not in before_ids:
+                        try:
+                            targets.unit_objects(u).Clear()
+                        except Exception:
+                            pass
                 try:
                     width = cap.Right - cap.Left
                 except Exception:
