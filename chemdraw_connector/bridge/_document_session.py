@@ -4,7 +4,7 @@ import os
 import time
 
 from .. import snapshots, state
-from ..com import doc_window
+from ..com import doc_window, nudge
 from ..domain import canvas
 from ..errors import ChemDrawError, InvalidInputError
 from ._plumbing import SLOW_TIMEOUT
@@ -16,15 +16,22 @@ class _DocumentSession:
             info = self._conn.info()
             app = self._conn.app()
             doc = app.ActiveDocument
-            info["active_document"] = doc.name if doc is not None else None
+            # Raw ActiveDocument can come back None even with exactly one
+            # document open (known-flaky COM property, see _doc()'s own
+            # docstring) -- _active_document_name's sole-survivor fallback
+            # covers that case for the reported name without forcing focus.
+            info["active_document"] = self._active_document_name(app)
             info["open_documents"] = app.Documents.Count
+            if doc is None and app.Documents.Count == 1:
+                doc = app.Documents.Item(1)
             if doc is not None:
                 snap = state.build_snapshot(doc, self._cache_for(doc))
-                real, wrapper_map, others = canvas.classify_units(snap)
+                real, wrapper_map, union_wrapper_map, others = canvas.classify_units(snap)
                 boxes = self._graphics_boxes(doc)
                 info["structures_on_page"] = len(real)
                 info["excluded_units"] = {
                     "caption_wrapper_duplicates": len(wrapper_map),
+                    "union_wrapper_duplicates": len(union_wrapper_map),
                     "decoration_groups": len(others),
                 }
                 info["captions_on_page"] = doc.Captions.Count
@@ -54,6 +61,7 @@ class _DocumentSession:
         def go():
             doc = self._conn.app().Documents.Add()
             doc.Activate()
+            nudge.bring_to_foreground(self._conn.hwnd)
             return {"active_document": doc.name}
         return self._run(go)
 
@@ -71,64 +79,97 @@ class _DocumentSession:
         prompt to answer for us (see doc_window.py: this only works at all
         because Modified is cleared BEFORE the close, which is what
         suppresses that prompt from appearing in the first place)."""
-        def go():
-            app = self._conn.app()
-            target = None
-            for i in range(1, app.Documents.Count + 1):
-                d = app.Documents.Item(i)
-                if d.name == name:
-                    target = d
-                    break
-            if target is None:
-                raise ChemDrawError(
-                    f"No open document named {name!r}. Open documents: "
-                    f"{[app.Documents.Item(i).name for i in range(1, app.Documents.Count + 1)]}"
-                )
-            if target.Modified and not discard_changes:
-                raise InvalidInputError(
-                    f"{name!r} has unsaved changes. Save it first "
-                    "(chemdraw_save_document, after chemdraw_set_active_"
-                    "document if it isn't already active) and retry, or "
-                    "pass discard_changes=true to close without saving."
-                )
-            was_active = (app.ActiveDocument is not None
-                         and app.ActiveDocument.name == name)
-            if discard_changes and target.Modified:
-                # Must happen BEFORE the close -- see doc_window.py's
-                # module docstring on why this is what actually suppresses
-                # ChemDraw's own "Save changes?" modal.
-                target.Modified = False
+        return self._run(lambda: self._close_document_now(name, discard_changes),
+                         timeout=SLOW_TIMEOUT)
 
-            hwnd = doc_window.find_document_window(name, self._conn.hwnd)
-            if hwnd is None:
-                raise ChemDrawError(
-                    f"Could not find {name!r}'s own window to close it "
-                    "(IChemDrawDocument.Close() itself is a confirmed "
-                    "no-op over COM on this ChemDraw version)."
-                )
-            doc_window.close_document_window(hwnd)
+    def _close_document_now(self, name, discard_changes=False):
+        """The actual close logic (worker thread only) -- a plain method,
+        not wrapped in self._run itself, so edit_stoichiometry_table can
+        call it synchronously from inside its own worker callback to
+        auto-close a stale throwaway window without re-entering the
+        worker (see that method's own docstring)."""
+        app = self._conn.app()
+        target = None
+        for i in range(1, app.Documents.Count + 1):
+            d = app.Documents.Item(i)
+            if d.name == name:
+                target = d
+                break
+        if target is None:
+            raise ChemDrawError(
+                f"No open document named {name!r}. Open documents: "
+                f"{[app.Documents.Item(i).name for i in range(1, app.Documents.Count + 1)]}"
+            )
+        if target.Modified and not discard_changes:
+            raise InvalidInputError(
+                f"{name!r} has unsaved changes. Save it first "
+                "(chemdraw_save_document, after chemdraw_set_active_"
+                "document if it isn't already active) and retry, or "
+                "pass discard_changes=true to close without saving."
+            )
+        was_active = (app.ActiveDocument is not None
+                     and app.ActiveDocument.name == name)
+        if discard_changes and target.Modified:
+            # Must happen BEFORE the close -- see doc_window.py's
+            # module docstring on why this is what actually suppresses
+            # ChemDraw's own "Save changes?" modal.
+            target.Modified = False
 
-            for _ in range(30):
-                time.sleep(0.1)
-                still_open = any(
-                    app.Documents.Item(i).name == name
-                    for i in range(1, app.Documents.Count + 1))
-                if not still_open:
-                    break
-            else:
-                raise ChemDrawError(
-                    f"Sent a close request for {name!r} but it still shows "
-                    "up in Documents after waiting 3s -- check the ChemDraw "
-                    "window by hand; it may be showing an unexpected dialog."
-                )
+        hwnd = doc_window.find_document_window(name, self._conn.hwnd)
+        if hwnd is None:
+            raise ChemDrawError(
+                f"Could not find {name!r}'s own window to close it "
+                "(IChemDrawDocument.Close() itself is a confirmed "
+                "no-op over COM on this ChemDraw version)."
+            )
+        doc_window.close_document_window(hwnd)
 
-            new_active = None
-            if was_active:
+        for _ in range(30):
+            time.sleep(0.1)
+            still_open = any(
+                app.Documents.Item(i).name == name
+                for i in range(1, app.Documents.Count + 1))
+            if not still_open:
+                break
+        else:
+            raise ChemDrawError(
+                f"Sent a close request for {name!r} but it still shows "
+                "up in Documents after waiting 3s -- check the ChemDraw "
+                "window by hand; it may be showing an unexpected dialog."
+            )
+
+        new_active = None
+        if was_active:
+            # app.ActiveDocument is the same known-flaky COM property
+            # _doc() already works around for every OTHER "current
+            # document" need in this codebase -- this call just performed
+            # a mutation (the close), so unlike the pure read-only
+            # _active_document_name helper, a short retry is warranted
+            # here: give ChemDraw's own internal re-activation a moment to
+            # catch up with the MDI child window's actual destruction.
+            active = None
+            for _ in range(5):
                 active = app.ActiveDocument
-                new_active = active.name if active is not None else None
-            return {"closed": name, "remaining_documents": app.Documents.Count,
-                    "new_active_document": new_active}
-        return self._run(go, timeout=SLOW_TIMEOUT)
+                if active is not None:
+                    break
+                time.sleep(0.1)
+            if active is not None:
+                new_active = active.name
+            elif app.Documents.Count == 1:
+                # Still None after retrying, but exactly one document is
+                # left -- make it authoritative (Activate it, don't just
+                # assume) rather than reporting null when the answer is
+                # actually unambiguous.
+                sole = app.Documents.Item(1)
+                sole.Activate()
+                new_active = sole.name
+            # else: 0 or 2+ documents remain with ActiveDocument still
+            # unresolvable -- genuinely ambiguous, report null rather than
+            # guess.
+            if new_active is not None:
+                self._doc_name = new_active  # keep _doc()'s own fallback in sync
+        return {"closed": name, "remaining_documents": app.Documents.Count,
+                "new_active_document": new_active}
 
     # One reusable scratch document. Document.Close() is a no-op over COM
     # (probed live on ChemDraw 26 — every variant), so every throwaway
@@ -144,6 +185,7 @@ class _DocumentSession:
                 doc = app.Documents.Item(i)
                 if doc.name == self.SCRATCH_DOC_NAME:
                     doc.Activate()
+                    nudge.bring_to_foreground(self._conn.hwnd)
                     cleared = doc.Atoms.Count
                     doc.Objects.Clear()
                     # doc.Objects.Clear() (above) does NOT clear doc.Graphics —
@@ -177,6 +219,7 @@ class _DocumentSession:
                             "cleared_graphics": graphics_cleared}
             doc = app.Documents.Add()
             doc.Activate()
+            nudge.bring_to_foreground(self._conn.hwnd)
             entry = {"reused": False, "cleared_atoms": 0}
             try:
                 path = os.path.join(os.path.dirname(snapshots.BACKUP_DIR),
@@ -211,6 +254,7 @@ class _DocumentSession:
                 )
             doc = self._conn.app().Documents.Open(path)
             doc.Activate()
+            nudge.bring_to_foreground(self._conn.hwnd)
             return {"active_document": doc.name, "path": path}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
@@ -284,13 +328,16 @@ class _DocumentSession:
     def list_documents(self):
         def go():
             app = self._conn.app()
-            active = app.ActiveDocument
+            # See _active_document_name's own docstring: app.ActiveDocument
+            # can come back None even with exactly one document open (known-
+            # flaky COM property); its sole-survivor fallback covers that
+            # case here without forcing window focus on a plain list query.
             return {
                 "documents": [
                     app.Documents.Item(i).name
                     for i in range(1, app.Documents.Count + 1)
                 ],
-                "active": active.name if active is not None else None,
+                "active": self._active_document_name(app),
             }
         return self._run(go)
 
@@ -301,6 +348,7 @@ class _DocumentSession:
                 doc = app.Documents.Item(i)
                 if doc.name == name:
                     doc.Activate()
+                    nudge.bring_to_foreground(self._conn.hwnd)
                     return {"active_document": doc.name}
             raise ChemDrawError(
                 f"No open document named {name!r}. Open documents: "

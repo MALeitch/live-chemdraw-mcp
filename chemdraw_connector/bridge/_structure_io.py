@@ -15,12 +15,13 @@ class _StructureIO:
 
         def go():
             doc = self._doc()
-            units = self._insert_structure_units(doc, representation, fmt)
+            units, wrappers = self._insert_structure_units(
+                doc, representation, fmt, include_wrappers=True)
             if position and units:
                 # A multi-fragment payload (a salt, a name-resolved
                 # organometallic like PdCl2(PPh3)2) returns more than one
                 # unit here -- one real ChemDraw Group per disconnected
-                # fragment (see _drop_wrapper_groups). Recentering EACH
+                # fragment (see _split_wrapper_groups). Recentering EACH
                 # fragment onto the same (x, y) individually (the old
                 # behavior) stacked every ion/ligand exactly on top of each
                 # other at one point -- confirmed live as the cause of
@@ -42,8 +43,34 @@ class _StructureIO:
             off_page = layout_math.page_overflow(
                 [layout_math.Box(u.Left, u.Top, u.Right, u.Bottom) for u in units],
                 ids, float(doc.Width or 540.0), float(doc.Height or 720.0))
+
+            # A disconnected-fragment payload (an ionic salt like
+            # "[Na+].[H-]") makes ChemDraw register an extra wrapper Group
+            # around its own fragments -- real, permanent, but silently
+            # excluded from `units` above (see _split_wrapper_groups) since
+            # moving/positioning it alongside its own children double-
+            # moves the same atoms. It's still a real object a caller may
+            # want to reference as ONE reagent (e.g. one row in
+            # chemdraw_make_stoichiometry_table, instead of two separate,
+            # individually-wrong-MW ion rows) -- surfaced here, additively,
+            # without changing `inserted`/`off_page`'s existing shape.
+            wrapper_groups = []
+            for w in wrappers:
+                entry = self._describe_units(doc, [w["unit"]])[0]
+                entry["wraps"] = [targets.ensure_id(c) for c in w["children"]]
+                entry["note"] = (
+                    "auto-created by ChemDraw around the disconnected "
+                    "fragments listed in 'wraps' (e.g. an ionic salt's "
+                    "ions) -- do NOT move/position this id independently, "
+                    "it double-moves the same underlying atoms as its "
+                    "children; safe to reference as one combined-reagent "
+                    "row in chemdraw_make_stoichiometry_table etc."
+                )
+                wrapper_groups.append(entry)
+
             return {"inserted": self._describe_units(doc, units),
-                    "off_page": off_page}
+                    "off_page": off_page,
+                    "wrapper_groups": wrapper_groups}
         return self._run(go, timeout=SLOW_TIMEOUT)
 
     def export_structure(self, fmt="molfile", target="selection"):

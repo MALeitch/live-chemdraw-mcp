@@ -171,7 +171,7 @@ class _Layout:
             # Each entry keeps its own units GROUPED, not flattened one
             # unit per grid cell -- a multi-fragment payload (a salt, a
             # name-resolved organometallic like PdCl2(PPh3)2) returns more
-            # than one real ChemDraw Group (see _drop_wrapper_groups), and
+            # than one real ChemDraw Group (see _split_wrapper_groups), and
             # the old flattened loop below treated each fragment as its
             # own independent table entry: one requested reagent could
             # fragment across several grid cells, each carrying its own
@@ -556,7 +556,7 @@ class _Layout:
                 rect = canvas.resolve_region(region, boxes)
             except ValueError as exc:
                 raise InvalidInputError(str(exc)) from exc
-            real, wrapper_map, others = canvas.classify_units(before)
+            real, wrapper_map, _, others = canvas.classify_units(before)
             owner_ids = canvas.associate_captions(
                 real, cap_entries, wrapper_map, {u["id"] for u in others},
                 boxes)
@@ -773,7 +773,7 @@ class _Layout:
                     targeted.append((oid, entry, obj))
             else:
                 boxes = self._graphics_boxes(doc)
-                real, wrapper_map, others = canvas.classify_units(snap)
+                real, wrapper_map, _, others = canvas.classify_units(snap)
                 owner_ids = canvas.associate_captions(
                     real, cap_entries, wrapper_map,
                     {u["id"] for u in others}, boxes)
@@ -885,7 +885,7 @@ class _Layout:
             cap_entries = cap_objs = owner_ids = None
             if move_with_captions:
                 cap_entries, cap_objs = self._gather_captions(doc)
-                real, wrapper_map, others = canvas.classify_units(before)
+                real, wrapper_map, _, others = canvas.classify_units(before)
                 owner_ids = canvas.associate_captions(
                     real, cap_entries, wrapper_map, {u["id"] for u in others},
                     self._graphics_boxes(doc))

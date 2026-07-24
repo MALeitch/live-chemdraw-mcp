@@ -13,7 +13,7 @@ from ..com import nudge
 from ..com import types as t
 from ..com.connection import Connection, is_dead_proxy
 from ..com.worker import ComWorker, DEFAULT_TIMEOUT
-from ..domain import enumeration
+from ..domain import enumeration, wrapper_detection
 from ..errors import ChemDrawError, InvalidInputError, UnexpectedConnectorError
 
 SLOW_TIMEOUT = 45.0  # name<->structure conversions and batch ops can be slow
@@ -151,8 +151,27 @@ class _Plumbing:
         else:
             doc = app.Documents.Add()
         doc.Activate()
+        nudge.bring_to_foreground(self._conn.hwnd)
         self._doc_name = doc.name
         return doc
+
+    @staticmethod
+    def _active_document_name(app):
+        """Best-effort active-document name for a pure status/read query —
+        no retry, no .Activate() side effect (a status call must never
+        move window focus). app.ActiveDocument is the same known-flaky COM
+        property _doc() works around for mutating calls (see its own
+        docstring); here, a single fallback covers the common case a
+        one-shot read actually hits: exactly one document open but
+        ActiveDocument came back None anyway. With 0 or 2+ documents open
+        and ActiveDocument still None, there's no reasonable single guess,
+        so this returns None rather than picking arbitrarily."""
+        active = app.ActiveDocument
+        if active is not None:
+            return active.name
+        if app.Documents.Count == 1:
+            return app.Documents.Item(1).name
+        return None
 
     @staticmethod
     def _insert_raw(objs, mime, payload):
@@ -255,10 +274,21 @@ class _Plumbing:
             return enumeration.validate_molblock(representation)
         return representation
 
-    def _insert_structure_units(self, doc, representation, fmt):
+    def _insert_structure_units(self, doc, representation, fmt, include_wrappers=False):
         """Insert and return the new units (worker thread). Verifies atoms
         actually appeared — an unknown/silently-ignored payload is an error,
-        not a success."""
+        not a success.
+
+        include_wrappers=False (the default, and every existing caller's
+        behavior, unchanged): returns just the list of real units, wrapper
+        groups silently dropped (see _split_wrapper_groups).
+        include_wrappers=True: returns (units, wrapper_entries) instead --
+        only chemdraw_insert_structure itself opts into this, to surface a
+        wrapper's own id/children (see bridge/_structure_io.py) without
+        touching the other 3 call sites (_layout.py's build_scope_table,
+        _reaction.py's reactant/product insertion x2), which only ever
+        need the real units and would have to be updated to unpack a
+        2-tuple for no benefit to them."""
         mime = t.mime_for(fmt)
         atoms_before = doc.Atoms.Count
         groups_before = doc.Groups.Count
@@ -272,10 +302,11 @@ class _Plumbing:
             doc.Groups.Item(i)
             for i in range(groups_before + 1, doc.Groups.Count + 1)
         ]
-        return self._drop_wrapper_groups(new_units)
+        kept, wrappers = self._split_wrapper_groups(new_units)
+        return (kept, wrappers) if include_wrappers else kept
 
     @staticmethod
-    def _drop_wrapper_groups(units):
+    def _split_wrapper_groups(units):
         """A single insertion payload with disconnected fragments (a salt,
         e.g. "[Na+].[OH-]") makes ChemDraw register one extra wrapper Group
         -- bounds and formula equal to the UNION of its own child fragments
@@ -287,37 +318,39 @@ class _Plumbing:
         underlying atoms, which is what made reaction-scheme salt
         fragments overlap their own wrapper.
 
-        Drop any unit whose bounding box strictly contains another unit's
-        in this same batch -- a wrapper's bounds always strictly contain
-        its children's combined bounds (larger area, not just touching),
-        while two genuinely independent fragments never fully contain one
-        another (disconnected structures never overlap by construction).
-        Only compares units from the SAME insertion call, never against
-        pre-existing document content, so this can't misfire on an
-        unrelated nearby structure. Falls back to returning every unit
-        unfiltered if bounds can't be read for some reason, rather than
-        risking dropping a real structure on a guess."""
+        Splits out any unit whose bounding box strictly contains one or
+        more other units' in this same batch -- a wrapper's bounds always
+        strictly contain its children's combined bounds (larger area, not
+        just touching), while two genuinely independent fragments never
+        fully contain one another (disconnected structures never overlap
+        by construction). Only compares units from the SAME insertion
+        call, never against pre-existing document content, so this can't
+        misfire on an unrelated nearby structure.
+
+        Returns (kept_units, wrapper_entries): kept_units excludes every
+        detected wrapper (same "don't double-position it" behavior as
+        before -- callers that don't care about wrappers can just use
+        this list unchanged); wrapper_entries is a list of
+        {"unit": <wrapper Group>, "children": [<child Groups>]}, one per
+        detected wrapper, for a caller (chemdraw_insert_structure) that
+        wants to surface the wrapper's own id/children rather than
+        silently discard it. Falls back to (units, []) if bounds can't be
+        read for some reason, rather than risking dropping a real
+        structure on a guess."""
         boxes = []
         for u in units:
             try:
                 boxes.append((u.Left, u.Top, u.Right, u.Bottom))
             except Exception:
-                return units
+                return units, []
 
-        def area(b):
-            return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
-
-        def strictly_contains(outer, inner, tol=0.5):
-            return (outer[0] <= inner[0] + tol and outer[1] <= inner[1] + tol
-                    and outer[2] >= inner[2] - tol and outer[3] >= inner[3] - tol
-                    and area(outer) > area(inner) + tol)
-
-        kept = [
-            u for i, u in enumerate(units)
-            if not any(j != i and strictly_contains(boxes[i], boxes[j])
-                       for j in range(len(units)))
+        contain_map = wrapper_detection.find_containing_wrappers(boxes, tol=0.5)
+        wrappers = [
+            {"unit": units[i], "children": [units[j] for j in kids]}
+            for i, kids in contain_map.items()
         ]
-        return kept or units
+        kept = [u for i, u in enumerate(units) if i not in contain_map]
+        return (kept if kept else units), wrappers
 
     def _describe_units(self, doc, units):
         w, h = float(doc.Width or 540), float(doc.Height or 720)

@@ -387,6 +387,159 @@ def test_compute_derived_yield_fields_bails_out_cleanly_on_real_fixture():
     assert result["reason"]
 
 
+# ---------------------------------------------------------------------------
+# plan_equivalents_cascade: recomputes "equivalents" (SGPropertyType 6) for
+# every reactant in a grid when a moles-affecting field is edited, since
+# ChemDraw's own reopen recompute cascades reactant_moles but never touches
+# equivalents (a confirmed live gap -- see the function's own docstring).
+# Reuses _component/_prop/_LIMITING/_NOT_LIMITING/_grid_dict from the
+# compute_derived_yield_fields tests above, same pure parse_grids-shaped
+# dicts, no CDXML text needed.
+# ---------------------------------------------------------------------------
+
+def _sample_mass_edit(ref, value, text=None):
+    return {"grid_index": 0, "structure_ref_id": ref, "property_type": 7,
+            "new_value": str(value), "new_display_text": text or f"{float(value):.2f}"}
+
+
+def test_plan_equivalents_cascade_recomputes_all_reactants_on_sample_mass_edit():
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={
+            4: _LIMITING, 2: _prop("100"), 13: _prop("0.01")}),   # 10 mmol, MW 100
+        _component(2, is_reactant=True, properties={
+            4: _NOT_LIMITING, 2: _prop("50"), 13: _prop("0.02")}),  # 20 mmol, MW 50
+    ])
+    equiv_edits, bail = sc.plan_equivalents_cascade(
+        grid, [_sample_mass_edit("2", "1.5")])  # -> 1.5g/50 * 1000 = 30 mmol
+    assert bail is None
+    by_ref = {e["structure_ref_id"]: e for e in equiv_edits}
+    assert set(by_ref) == {"1", "2"}
+    assert all(e["property_type"] == 6 for e in equiv_edits)
+    assert float(by_ref["2"]["new_value"]) == pytest.approx(3.0)   # 30 / 10 (limiting, unedited)
+    assert float(by_ref["1"]["new_value"]) == pytest.approx(1.0)   # limiting reagent vs. itself
+
+
+def test_plan_equivalents_cascade_applies_percent_weight_to_sample_mass():
+    """Reproduces a live-confirmed bug: a reactant weighed as an impure
+    dispersion (e.g. a 60wt% NaH dispersion) must have percent_weight
+    applied to sample_mass BEFORE dividing by molecular_weight -- skipping
+    it inflated equivalents by 1/percent_weight (a live NaH row came back
+    as 1.84 eq instead of the correct ~1.10 before this factor was added
+    to post_moles)."""
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={
+            4: _LIMITING, 2: _prop("110.174"), 13: _prop("0.002")}),   # 2.00 mmol, unedited
+        _component(2, is_reactant=True, properties={
+            4: _NOT_LIMITING, 2: _prop("24.0"), 13: _prop("0.001")}),  # stale, about to be edited
+    ])
+    edits = [
+        _sample_mass_edit("2", "0.08824"),  # 88.24 mg AS-WEIGHED 60wt% dispersion
+        {"grid_index": 0, "structure_ref_id": "2", "property_type": 8,
+         "new_value": "0.6", "new_display_text": "60.00"},
+    ]
+    equiv_edits, bail = sc.plan_equivalents_cascade(grid, edits)
+    assert bail is None
+    by_ref = {e["structure_ref_id"]: e for e in equiv_edits}
+    # pure mass = 0.08824 * 0.6 = 0.052944 g; moles = 0.052944 / 24.0 = 0.002206 mol
+    assert float(by_ref["2"]["new_value"]) == pytest.approx(0.002206 / 0.002, rel=1e-3)
+
+
+def test_plan_equivalents_cascade_percent_weight_edit_alone_still_recomputes():
+    """A percent_weight edit with NO accompanying sample_mass edit in the
+    same batch must still use the reactant's EXISTING sample_mass (type 7)
+    -- not silently skip recomputation."""
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={
+            4: _LIMITING, 2: _prop("110.174"), 13: _prop("0.002")}),
+        _component(2, is_reactant=True, properties={
+            4: _NOT_LIMITING, 2: _prop("24.0"), 7: _prop("0.08824"), 13: _prop("0.003677")}),
+    ])
+    edits = [{"grid_index": 0, "structure_ref_id": "2", "property_type": 8,
+             "new_value": "0.6", "new_display_text": "60.00"}]
+    equiv_edits, bail = sc.plan_equivalents_cascade(grid, edits)
+    assert bail is None
+    by_ref = {e["structure_ref_id"]: e for e in equiv_edits}
+    assert float(by_ref["2"]["new_value"]) == pytest.approx(0.002206 / 0.002, rel=1e-3)
+
+
+def test_plan_equivalents_cascade_edit_on_limiting_reagent_rescales_everyone():
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={
+            4: _LIMITING, 2: _prop("100"), 13: _prop("0.01")}),   # 10 mmol
+        _component(2, is_reactant=True, properties={
+            4: _NOT_LIMITING, 2: _prop("50"), 13: _prop("0.02")}),  # 20 mmol, unedited
+    ])
+    equiv_edits, bail = sc.plan_equivalents_cascade(
+        grid, [_sample_mass_edit("1", "4.0")])  # -> 4.0g/100 * 1000 = 40 mmol
+    assert bail is None
+    by_ref = {e["structure_ref_id"]: e for e in equiv_edits}
+    assert float(by_ref["1"]["new_value"]) == pytest.approx(1.0)   # limiting vs. itself
+    assert float(by_ref["2"]["new_value"]) == pytest.approx(0.5)   # 20 (unedited) / 40 (new limiting)
+
+
+def test_plan_equivalents_cascade_skips_when_no_moles_affecting_field_edited():
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={4: _LIMITING, 2: _prop("100"), 13: _prop("0.01")}),
+        _component(2, is_reactant=True, properties={4: _NOT_LIMITING, 2: _prop("50"), 13: _prop("0.02")}),
+    ])
+    edits = [{"grid_index": 0, "structure_ref_id": "2", "property_type": 4,
+             "new_value": "0", "new_display_text": "No"}]
+    assert sc.plan_equivalents_cascade(grid, edits) == ([], None)
+
+
+def test_plan_equivalents_cascade_does_not_override_explicit_equivalents_edit():
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={4: _LIMITING, 2: _prop("100"), 13: _prop("0.01")}),
+        _component(2, is_reactant=True, properties={4: _NOT_LIMITING, 2: _prop("50"), 13: _prop("0.02")}),
+    ])
+    edits = [
+        _sample_mass_edit("2", "1.5"),
+        {"grid_index": 0, "structure_ref_id": "2", "property_type": 6,
+         "new_value": "9.99", "new_display_text": "9.99"},
+    ]
+    equiv_edits, bail = sc.plan_equivalents_cascade(grid, edits)
+    assert bail is None
+    refs = {e["structure_ref_id"] for e in equiv_edits}
+    assert "2" not in refs  # caller's own explicit equivalents edit wins, never overridden
+    assert "1" in refs      # limiting reagent still recomputed
+
+
+def test_plan_equivalents_cascade_bails_with_no_limiting_reagent():
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={4: _NOT_LIMITING, 2: _prop("100"), 13: _prop("0.01")}),
+        _component(2, is_reactant=True, properties={4: _NOT_LIMITING, 2: _prop("50"), 13: _prop("0.02")}),
+    ])
+    equiv_edits, bail = sc.plan_equivalents_cascade(grid, [_sample_mass_edit("2", "1.5")])
+    assert equiv_edits == []
+    assert "no reactant component is flagged" in bail
+
+
+def test_plan_equivalents_cascade_bails_with_multiple_limiting_reagents():
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={4: _LIMITING, 2: _prop("100"), 13: _prop("0.01")}),
+        _component(2, is_reactant=True, properties={4: _LIMITING, 2: _prop("50"), 13: _prop("0.02")}),
+    ])
+    equiv_edits, bail = sc.plan_equivalents_cascade(grid, [_sample_mass_edit("2", "1.5")])
+    assert equiv_edits == []
+    assert "2 reactant components" in bail
+
+
+def test_plan_equivalents_cascade_short_circuits_with_one_reactant():
+    grid = _grid_dict([
+        _component(1, is_reactant=True, properties={4: _LIMITING, 2: _prop("100"), 13: _prop("0.01")}),
+        _component(2, properties={2: _prop("136.15"), 17: _prop("1")}),  # product, not a 2nd reactant
+    ])
+    assert sc.plan_equivalents_cascade(grid, [_sample_mass_edit("1", "2.0")]) == ([], None)
+
+
+def test_format_value_moved_to_domain_module_and_matches_old_behavior():
+    """format_value now lives here (moved from bridge/_stoichiometry.py's
+    formerly-private _format_value, which is now just an alias to this) --
+    same behavior, new home."""
+    assert sc.format_value(5) == "5"
+    assert sc.format_value(1.0719) == repr(1.0719)
+
+
 def test_hidden_property_reports_visible_false():
     text = CDXML_ONE_GRID.replace(
         '<objecttag id="157"><t p="0 0">',

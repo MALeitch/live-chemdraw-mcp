@@ -42,6 +42,23 @@ def test_write_base_name_sanitizes_unsafe_characters():
 
 
 # ---------------------------------------------------------------------------
+# _STOICH_SUFFIX_RE: the same regex edit_stoichiometry_table uses to decide
+# whether the document it's about to edit is itself a connector-generated
+# throwaway from a PRIOR edit (safe to auto-close) vs. the user's original
+# file (never auto-closed). Tested against the extension-stripped base name,
+# matching how edit_stoichiometry_table's go() actually applies it.
+# ---------------------------------------------------------------------------
+
+def test_stoich_suffix_re_matches_a_generated_throwaway_name():
+    assert bs._STOICH_SUFFIX_RE.search("foo-stoich-20260724-153000-a1b2c3")
+
+
+def test_stoich_suffix_re_rejects_a_plain_document_name():
+    assert not bs._STOICH_SUFFIX_RE.search("foo")
+    assert not bs._STOICH_SUFFIX_RE.search("foo-stoichiometric")
+
+
+# ---------------------------------------------------------------------------
 # read_stoichiometry_tables: verifies the computed_theoretical_mass/
 # computed_percent_yield merge actually reaches the tool's output shape --
 # NOT via a live ChemDraw connection (forbidden while the user has a real

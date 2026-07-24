@@ -690,6 +690,120 @@ def main():
         tmp_csv = os.path.join(tempfile.gettempdir(), "chemdraw_smoke.csv")
         check("export csv", lambda: b.export_data_table(en["derivatives"], tmp_csv))
 
+    print("== ionic wrapper surfaced + no false-positive overlap (cleared scratch) ==")
+    check("clear scratch", b.use_scratch_document)
+    thiophenol = check("insert thiophenol", lambda: b.insert_structure(
+        "Sc1ccccc1", "smiles", (40, 100)))
+    nah = check("insert NaH ionic pair", lambda: b.insert_structure(
+        "[Na+].[H-]", "smiles", (100, 100)))
+    tosylate = check("insert CF3CH2 tosylate", lambda: b.insert_structure(
+        "CC1=CC=C(C=C1)S(=O)(=O)OCC(F)(F)F", "smiles", (180, 100)))
+    mcpba = check("insert mCPBA", lambda: b.insert_structure(
+        "OOC(=O)c1cccc(Cl)c1", "smiles", (290, 100)))
+    product = check("insert SM65 product", lambda: b.insert_structure(
+        "O=S(=O)(c1ccccc1)CC(F)(F)F", "smiles", (400, 100)))
+
+    thiophenol_id = thiophenol["inserted"][0]["id"] if thiophenol else None
+    tosylate_id = tosylate["inserted"][0]["id"] if tosylate else None
+    mcpba_id = mcpba["inserted"][0]["id"] if mcpba else None
+    product_id = product["inserted"][0]["id"] if product else None
+    nah_wrapper_id = ion_ids = None
+    if nah:
+        # Fixes a real gap: insert_structure used to silently drop this
+        # wrapper Group entirely (see _split_wrapper_groups) -- the only
+        # way to find it was via an unrelated move_objects call's
+        # unexpected_moves field. Now it's surfaced directly.
+        assert nah["wrapper_groups"], nah
+        wrapper = nah["wrapper_groups"][0]
+        assert wrapper["formula"] == "HNa", wrapper
+        ion_ids = {u["id"] for u in nah["inserted"]}
+        assert set(wrapper["wraps"]) == ion_ids, (wrapper, ion_ids)
+        nah_wrapper_id = wrapper["id"]
+
+    state = check("get_document_state (no false-positive wrapper overlap)",
+                  b.get_document_state)
+    if state and nah_wrapper_id and ion_ids:
+        # Before find_union_wrapper_duplicates existed, this wrapper
+        # survived into "structures" and permanently triggered a
+        # false-positive overlapping_pairs entry against each of its own
+        # children on every read.
+        overlap_ids = {frozenset(p) for p in state["overlapping_pairs"]}
+        for child_id in ion_ids:
+            assert frozenset({nah_wrapper_id, child_id}) not in overlap_ids, (
+                nah_wrapper_id, child_id, state["overlapping_pairs"])
+        excluded_ids = {u["id"] for u in state["non_structure_units"]}
+        assert nah_wrapper_id in excluded_ids, (nah_wrapper_id, state["non_structure_units"])
+        real_ids = {s["id"] for s in state["structures"]}
+        assert nah_wrapper_id not in real_ids, (nah_wrapper_id, real_ids)
+
+    print("== stoichiometry: equivalents cascade + auto-close (same scratch doc) ==")
+    grid = None
+    if thiophenol_id and nah_wrapper_id and tosylate_id and mcpba_id and product_id:
+        grid = check("make_stoichiometry_table (4 reactants incl. ionic wrapper)",
+                     lambda: b.make_stoichiometry_table(
+                         [thiophenol_id, nah_wrapper_id, tosylate_id, mcpba_id],
+                         [product_id]))
+
+    edited = None
+    if grid is not None:
+        # Same scaled-2mmol numbers as the live SM65 procedure this
+        # connector was originally debugged against: thiophenol limiting
+        # (1.00 eq), NaH as a 60wt% dispersion (1.10 eq), tosylate (1.01
+        # eq), mCPBA as 75wt% (3.04 eq) -- percent_weight must be applied
+        # to sample_mass before dividing by MW, or NaH/mCPBA come out
+        # inflated by 1/percent_weight (a real bug caught live once, see
+        # domain/stoichiometry_cdxml.py's plan_equivalents_cascade).
+        edited = check("edit_stoichiometry_table (batch 1: masses + purity)",
+                       lambda: b.edit_stoichiometry_table(grid["grid_index"], [
+                           {"structure_id": thiophenol_id, "field": "sample_mass", "value": 0.220348},
+                           {"structure_id": nah_wrapper_id, "field": "sample_mass", "value": 0.08824},
+                           {"structure_id": nah_wrapper_id, "field": "percent_weight", "value": 0.6},
+                           {"structure_id": tosylate_id, "field": "sample_mass", "value": 0.51471},
+                           {"structure_id": mcpba_id, "field": "sample_mass", "value": 1.40024},
+                           {"structure_id": mcpba_id, "field": "percent_weight", "value": 0.75},
+                       ]))
+    if edited:
+        assert edited["equivalents_recompute_skipped"] is None, edited
+        equiv_by_id = {e["structure_id"]: e["equivalents"]
+                      for e in edited["equivalents_recomputed"]}
+        expected_equiv = {thiophenol_id: 1.00, nah_wrapper_id: 1.103,
+                         tosylate_id: 1.012, mcpba_id: 3.043}
+        for sid, expected in expected_equiv.items():
+            assert abs(equiv_by_id.get(sid, -1) - expected) < 0.01, (
+                sid, equiv_by_id, expected_equiv)
+        assert edited["auto_closed_previous_document"] is None, edited  # first edit, real scratch doc
+
+        edited_again = check(
+            "edit_stoichiometry_table again (auto-close prior throwaway)",
+            lambda: b.edit_stoichiometry_table(
+                grid["grid_index"],
+                [{"structure_id": product_id, "field": "actual_mass", "value": 0.211}]))
+        if edited_again:
+            assert edited_again["auto_closed_previous_document"] == edited["new_active_document"], (
+                edited_again, edited)
+            docs_after = check("list_documents (no leaked throwaway window)",
+                               b.list_documents)
+            if docs_after:
+                assert edited["new_active_document"] not in docs_after["documents"], docs_after
+
+        print("== annotate_expected_mass caption dedupe (issue 1) ==")
+        read1 = check("read_stoichiometry_table(annotate_expected_mass=True) #1",
+                      lambda: b.read_stoichiometry_tables(annotate_expected_mass=True))
+        read2 = check("read_stoichiometry_table(annotate_expected_mass=True) #2 (no dup)",
+                      lambda: b.read_stoichiometry_tables(annotate_expected_mass=True))
+        if read1:
+            assert product_id in read1.get("annotated_expected_mass", []), read1
+        if read2:
+            # Second call must detect the caption #1 already added (tagged
+            # via tag_caption_owner, text starting "Expected:") and skip it
+            # -- not stack a duplicate.
+            assert read2.get("annotated_expected_mass") == [], read2
+        layout = check("get_layout (exactly one Expected: caption)", lambda: b.get_layout("document"))
+        if layout:
+            expected_caps = [c for c in layout["captions"]
+                             if c.get("text", "").startswith("Expected:")]
+            assert len(expected_caps) == 1, expected_caps
+
     print("== undo ==")
     check("undo", b.undo)
 

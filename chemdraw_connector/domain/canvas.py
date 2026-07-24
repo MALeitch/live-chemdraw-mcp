@@ -11,7 +11,7 @@ are the plain dicts bridge.get_layout already produces (structures with
 id/atom_count/bounds, captions with text/bounds/group_id, boxes with
 index/bounds) — no COM anywhere.
 """
-from . import layout_math
+from . import layout_math, wrapper_detection
 
 # "Label under structure" convention: a caption within this vertical gap of
 # a horizontally-overlapping structure's bottom edge is its label.
@@ -158,15 +158,73 @@ def find_wrapper_duplicates(structures):
     return out
 
 
+def find_union_wrapper_duplicates(structures):
+    """{wrapper_id: [wrapped_id, ...]} for phantom duplicates caused by a
+    ChemDraw-created wrapper Group around MULTIPLE disconnected fragments
+    -- e.g. inserting an ionic salt like "[Na+].[H-]" makes ChemDraw
+    register a wrapper (formula "HNa", bounds = the union of its two
+    children) alongside the two real ion fragments, which also each
+    appear independently. This is a DIFFERENT wrapper shape from
+    find_wrapper_duplicates' single-child caption case (a structure
+    regrouped with its own caption text, same formula as the structure
+    alone, extended by a thin caption-sized margin): here there are TWO OR
+    MORE contained children, and the wrapper's formula is the UNION of
+    its children's formulas ("HNa" contains neither "Na" nor "H" alone),
+    so find_wrapper_duplicates' formula-equality precondition rejects it
+    immediately and it would otherwise survive into `real` forever,
+    permanently triggering false-positive overlapping_structures pairs
+    against its own children on every subsequent read (confirmed live).
+
+    Detected structurally instead of by formula: a candidate wrapper's
+    bounding box must strictly contain 2+ other structures' boxes (same
+    bbox-containment primitive find_wrapper_duplicates and
+    _plumbing._split_wrapper_groups both use, see
+    wrapper_detection.find_containing_wrappers), those contained
+    structures must be pairwise DISJOINT (two real, independent fragments
+    never overlap each other by construction -- if they did, this isn't
+    that shape), and the wrapper's own atom_count must equal the SUM of
+    its children's atom_count (replaces formula-equality, which isn't
+    reliable for a union; a wrapper's atoms are exactly its children's
+    atoms, nothing more).
+
+    A single-contained-child case is intentionally left to
+    find_wrapper_duplicates (not reported here) -- that's the caption
+    shape, not this one."""
+    with_bounds = [s for s in structures if s.get("bounds")]
+    boxes = [(s["bounds"]["left"], s["bounds"]["top"],
+             s["bounds"]["right"], s["bounds"]["bottom"]) for s in with_bounds]
+    contain_map = wrapper_detection.find_containing_wrappers(boxes, tol=WRAPPER_SLOP_PT)
+    out = {}
+    for i, kid_idxs in contain_map.items():
+        if len(kid_idxs) < 2:
+            continue  # single-child: find_wrapper_duplicates' job, not this one's
+        kids = [with_bounds[j] for j in kid_idxs]
+        if any(_intersects(kids[a]["bounds"], kids[b]["bounds"])
+              for a in range(len(kids)) for b in range(a + 1, len(kids))):
+            continue  # children must be pairwise disjoint (real fragments never overlap)
+        wrapper = with_bounds[i]
+        children_atoms = sum(k.get("atom_count") or 0 for k in kids)
+        if (wrapper.get("atom_count") or 0) != children_atoms:
+            continue  # a real union wrapper's atoms are exactly its children's, no more/less
+        out[wrapper["id"]] = [k["id"] for k in kids]
+    return out
+
+
 def classify_units(units):
     """The one entry point for "which of these are actual molecules":
-    (real_structures, wrapper_map, others). real excludes both zero-atom
-    units and wrapper duplicates; wrapper_map maps each excluded wrapper to
-    the real structure it duplicates; others is everything with no atoms."""
+    (real_structures, wrapper_map, union_wrapper_map, others). real
+    excludes zero-atom units and BOTH wrapper shapes (single-child/caption
+    duplicates via wrapper_map, multi-child/ionic-union duplicates via
+    union_wrapper_map); wrapper_map maps each excluded single-child
+    wrapper to the one real structure it duplicates; union_wrapper_map
+    maps each excluded multi-child wrapper to the list of real structures
+    it wraps; others is everything with no atoms."""
     with_atoms, others = split_real_structures(units)
     wrapper_map = find_wrapper_duplicates(with_atoms)
-    real = [s for s in with_atoms if s["id"] not in wrapper_map]
-    return real, wrapper_map, others
+    union_wrapper_map = find_union_wrapper_duplicates(with_atoms)
+    excluded = set(wrapper_map) | set(union_wrapper_map)
+    real = [s for s in with_atoms if s["id"] not in excluded]
+    return real, wrapper_map, union_wrapper_map, others
 
 
 def associate_captions(structures, captions, wrapper_map=None,
@@ -408,7 +466,14 @@ def build_canvas(units, captions, boxes, region=None,
     BOX, not the page itself, and the preview image auto-crops to whatever
     was drawn so it can't show a page edge either. Omit to skip the check
     entirely (e.g. callers with no reliable page size)."""
-    real, wrapper_map, others = classify_units(units)
+    real, wrapper_map, union_wrapper_map, others = classify_units(units)
+    # union_wrapper_map is deliberately NOT passed to associate_captions --
+    # its {wrapper_id: single_structure_id} contract assumes one wrapped
+    # structure per wrapper (see its own docstring, tiers 0b/2); a
+    # multi-child map with list values would silently corrupt caption-
+    # ownership resolution if a caption ever tagged to a union wrapper.
+    # No caption should ever legitimately target one anyway (it wraps a
+    # salt's ions, not a labeled structure), so it's kept fully separate.
     owner_ids = associate_captions(real, captions, wrapper_map,
                                    {u["id"] for u in others}, boxes)
 
@@ -514,6 +579,12 @@ def build_canvas(units, captions, boxes, region=None,
              "note": f"phantom duplicate: a wrapper group around structure "
                      f"{sid} and its caption; target {sid} instead"}
             for wid, sid in wrapper_map.items()
+        ] + [
+            {"id": wid,
+             "note": "phantom duplicate: an auto-created ionic/salt wrapper "
+                     f"around structures {sids}; target those individually "
+                     "instead"}
+            for wid, sids in union_wrapper_map.items()
         ],
         "violations": {
             "overlapping_structures": [list(p) for p in overlaps],

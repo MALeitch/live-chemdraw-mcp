@@ -13,6 +13,16 @@ from ._common import as_json
 
 def register(mcp, bridge):
     @mcp.tool(description=(
+        "IMPORTANT, read first: the expected/theoretical mass and %yield "
+        "for a product built here (both ChemDraw's own native theoretical_"
+        "mass/theoretical_moles/%Yield fields, which never populate at "
+        "all, and this connector's own computed_theoretical_mass/"
+        "computed_percent_yield workaround) NEVER appear in the rendered "
+        "ChemDraw stoichiometry table on the canvas -- they exist ONLY in "
+        "chemdraw_read_stoichiometry_table's JSON response. To make the "
+        "expected mass visible on the canvas itself, pass "
+        "annotate_expected_mass=true to chemdraw_read_stoichiometry_table, "
+        "or add your own caption. "
         "Build a native Stoichiometry Grid (Structure > Stoichiometry "
         "Table in ChemDraw's own UI) from EXISTING structures already on "
         "the canvas. reactant_ids/product_ids: JSON lists of claude_ids "
@@ -50,8 +60,20 @@ def register(mcp, bridge):
             bridge.make_stoichiometry_table(reactant_ids, product_ids))
 
     @mcp.tool()
-    def chemdraw_read_stoichiometry_table() -> str:
-        """Read every native Stoichiometry Grid on the active document
+    def chemdraw_read_stoichiometry_table(annotate_expected_mass: bool = False) -> str:
+        """IMPORTANT, read first: computed_theoretical_mass and
+        computed_percent_yield below (and ChemDraw's own native theoretical_mass/
+        theoretical_moles/%Yield fields, which never populate at all)
+        NEVER appear in the rendered ChemDraw stoichiometry table on the
+        canvas -- they exist ONLY in this call's JSON response. Pass
+        annotate_expected_mass=true to also add a small "Expected: ..."
+        caption under each product structure with its computed_theoretical_
+        mass (skipped, no error, for any product where that value is null
+        -- see the "reason" field). Calling this repeatedly with the flag
+        on is safe -- it won't stack duplicate captions on the same
+        structure.
+
+        Read every native Stoichiometry Grid on the active document
         (Structure > Stoichiometry Table in ChemDraw's own UI, or one this
         connector built by selecting reactants + an arrow before calling
         the underlying COM MakeStoichiometryGrid). Returns each grid's
@@ -102,9 +124,21 @@ def register(mcp, bridge):
         until given a non-default value). Pass a component's structure_id
         to chemdraw_edit_stoichiometry_table to change one of its editable
         fields."""
-        return as_json(bridge.read_stoichiometry_tables())
+        return as_json(bridge.read_stoichiometry_tables(annotate_expected_mass))
 
     @mcp.tool(description=(
+        "IMPORTANT, read first: the expected/theoretical mass and %yield "
+        "for a product edited here NEVER appear in the rendered ChemDraw "
+        "stoichiometry table on the canvas -- see chemdraw_read_"
+        "stoichiometry_table's own description (annotate_expected_mass) if "
+        "you want that number visible on the canvas. Also note: editing "
+        "any of sample_mass/reactant_moles/density/volume for a reactant "
+        "automatically recomputes and writes 'equivalents' for every "
+        "reactant in the same grid in this same batch (see "
+        "equivalents_recomputed/equivalents_recompute_skipped in the "
+        "response) -- you don't need to also submit an explicit "
+        "'equivalents' edit unless you want to override that computed "
+        "value. "
         "Edit one or more fields on ONE native Stoichiometry Grid "
         "(grid_index from chemdraw_read_stoichiometry_table) in a single "
         "batch. edits: a JSON list of {\"structure_id\": <claude_id from "
@@ -125,9 +159,12 @@ def register(mcp, bridge):
         "want to change into ONE call (not one call per field) to keep "
         "this to one new window per logical edit. The response's "
         "new_active_document/new_path tell you which window is now "
-        "current -- pass the PREVIOUS active document's name to "
-        "chemdraw_close_document (discard_changes=true, since it's now "
-        "stale/superseded) if you no longer need it, rather than leaving "
-        "it open by hand."))
+        "current. If the PREVIOUS window was itself a throwaway from an "
+        "earlier chemdraw_edit_stoichiometry_table call (not your original "
+        "document), it is closed automatically -- see the response's "
+        "auto_closed_previous_document. Otherwise (first edit against your "
+        "real file), it's left open; pass its name to "
+        "chemdraw_close_document (discard_changes=true) yourself if you "
+        "no longer need it."))
     def chemdraw_edit_stoichiometry_table(grid_index: int, edits: list[dict]) -> str:
         return as_json(bridge.edit_stoichiometry_table(grid_index, edits))

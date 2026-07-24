@@ -148,7 +148,7 @@ class _SpecialtyObjects:
         """Resolve the rectangle to bracket: explicit left/top/right/bottom
         win if all four are given; otherwise the union bounding box of
         `target`'s resolved units (Left/Top/Right/Bottom, the same plain
-        properties _drop_wrapper_groups already reads elsewhere in this
+        properties _split_wrapper_groups already reads elsewhere in this
         codebase)."""
         if None not in (left, top, right, bottom):
             return float(left), float(top), float(right), float(bottom)

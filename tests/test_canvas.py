@@ -76,9 +76,64 @@ def test_classify_units_excludes_wrappers_and_empties():
     s = _structure("s1", _b(0, 0, 50, 50), atoms=14)
     wrap = _structure("wrap1", _b(0, 0, 50, 70), atoms=14)
     empty = _structure("deco1", _b(200, 200, 260, 210), atoms=0)
-    real, wrapper_map, others = canvas.classify_units([s, wrap, empty])
+    real, wrapper_map, union_wrapper_map, others = canvas.classify_units([s, wrap, empty])
     assert [u["id"] for u in real] == ["s1"]
     assert wrapper_map == {"wrap1": "s1"}
+    assert union_wrapper_map == {}
+    assert [u["id"] for u in others] == ["deco1"]
+
+
+# ---------- find_union_wrapper_duplicates ----------
+# The ionic-salt-insertion shape: a wrapper Group around TWO OR MORE
+# disjoint fragments (e.g. inserting "[Na+].[H-]" makes ChemDraw register a
+# wrapper -- formula "HNa", the UNION of its children's formulas -- which
+# find_wrapper_duplicates' formula-equality check can never catch, since
+# "HNa" never equals either child's own formula "Na"/"H").
+
+def test_union_wrapper_duplicate_detected_by_containment_and_atom_sum():
+    na = _structure("na", _b(10, 10, 30, 30), atoms=1)
+    h = _structure("h", _b(60, 10, 80, 30), atoms=1)
+    wrap = _structure("wrap_hna", _b(0, 0, 100, 40), atoms=2)  # == sum of children's atoms
+    assert canvas.find_union_wrapper_duplicates([na, h, wrap]) == {"wrap_hna": ["na", "h"]}
+
+
+def test_union_wrapper_rejects_overlapping_children():
+    # Two real, independent fragments never overlap each other by
+    # construction -- if the "children" do overlap, this isn't the union-
+    # wrapper shape at all, so it must not be classified as one.
+    na = _structure("na", _b(10, 10, 50, 30), atoms=1)
+    h = _structure("h", _b(40, 10, 80, 30), atoms=1)  # overlaps na
+    wrap = _structure("wrap_hna", _b(0, 0, 100, 40), atoms=2)
+    assert canvas.find_union_wrapper_duplicates([na, h, wrap]) == {}
+
+
+def test_union_wrapper_rejects_atom_count_mismatch():
+    na = _structure("na", _b(10, 10, 30, 30), atoms=1)
+    h = _structure("h", _b(60, 10, 80, 30), atoms=1)
+    wrap = _structure("wrap_hna", _b(0, 0, 100, 40), atoms=99)  # doesn't match sum
+    assert canvas.find_union_wrapper_duplicates([na, h, wrap]) == {}
+
+
+def test_union_wrapper_ignores_single_child_containment():
+    # A single contained child is the caption-wrapper shape --
+    # find_wrapper_duplicates' job, not this one's; must not double-report.
+    s = _structure("s1", _b(0, 0, 50, 50), atoms=14)
+    wrap = _structure("wrap1", _b(0, 0, 50, 70), atoms=14)
+    assert canvas.find_union_wrapper_duplicates([s, wrap]) == {}
+
+
+def test_classify_units_excludes_both_caption_and_union_wrappers_simultaneously():
+    s = _structure("s1", _b(0, 0, 50, 50), atoms=14)
+    caption_wrap = _structure("wrap1", _b(0, 0, 50, 70), atoms=14)
+    na = _structure("na", _b(200, 0, 220, 20), atoms=1)
+    h = _structure("h", _b(240, 0, 260, 20), atoms=1)
+    union_wrap = _structure("wrap_hna", _b(190, 0, 270, 30), atoms=2)
+    empty = _structure("deco1", _b(300, 300, 360, 310), atoms=0)
+    real, wrapper_map, union_wrapper_map, others = canvas.classify_units(
+        [s, caption_wrap, na, h, union_wrap, empty])
+    assert {u["id"] for u in real} == {"s1", "na", "h"}
+    assert wrapper_map == {"wrap1": "s1"}
+    assert union_wrapper_map == {"wrap_hna": ["na", "h"]}
     assert [u["id"] for u in others] == ["deco1"]
 
 
@@ -299,6 +354,23 @@ def test_build_canvas_reports_overlaps():
              _structure("b", _b(50, 50, 150, 150))]
     out = canvas.build_canvas(units, [], [])
     assert out["violations"]["overlapping_structures"] == [["a", "b"]]
+
+
+def test_build_canvas_does_not_report_union_wrapper_overlapping_its_own_children():
+    # Reproduces the real bug: before find_union_wrapper_duplicates
+    # existed, an ionic-salt insertion's auto-created wrapper Group (bounds
+    # = union of its two ion children) survived into `real` and permanently
+    # triggered false-positive overlapping_structures pairs against both
+    # its own children on every read.
+    na = _structure("na", _b(10, 10, 30, 30), atoms=1)
+    h = _structure("h", _b(60, 10, 80, 30), atoms=1)
+    wrap = _structure("wrap_hna", _b(0, 0, 100, 40), atoms=2)
+    out = canvas.build_canvas([na, h, wrap], [], [])
+    assert out["violations"]["overlapping_structures"] == []
+    assert {u["id"] for u in out["structures"]} == {"na", "h"}
+    excluded_note = next(u["note"] for u in out["non_structure_units"]
+                         if u["id"] == "wrap_hna")
+    assert "na" in excluded_note and "h" in excluded_note
 
 
 def test_build_canvas_off_page_requires_page_size():

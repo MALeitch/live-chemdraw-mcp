@@ -139,7 +139,21 @@ def register(mcp, bridge):
         per fragment) plus `off_page`: non-empty if an explicit x/y (or
         ChemDraw's own auto-placement) put any fragment outside the
         document's actual page — there is no preview image on this call
-        to catch it visually, so check this field directly."""
+        to catch it visually, so check this field directly.
+
+        Also returns `wrapper_groups`: for a disconnected-fragment payload,
+        ChemDraw additionally creates an invisible wrapper Group around
+        those fragments (bounds/formula = the UNION of its children, e.g.
+        "HNa" wrapping a "Na" and an "H" ion) that is NOT one of the
+        `inserted` fragments and must never be moved/positioned on its own
+        (it double-moves the same underlying atoms as its children) — but
+        it IS a real, addressable object, and its own id is the right one
+        to use if you want to reference the whole combined reagent as a
+        single unit (e.g. one row in chemdraw_make_stoichiometry_table,
+        instead of two separate ion rows each with an individually wrong
+        molecular weight). Each entry has the wrapper's own id/formula/
+        bounds plus `wraps` (the ids of the fragments it contains). Empty
+        for an ordinary single-fragment insertion."""
         if (x is None) != (y is None):
             raise ValueError("x and y must be given together, or both omitted")
         pos = (x, y) if x is not None else None

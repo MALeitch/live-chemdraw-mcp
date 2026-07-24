@@ -12,6 +12,7 @@ import tempfile
 import uuid
 
 from .. import snapshots, targets
+from ..com import nudge
 from ..domain import layout_math
 from ..domain import stoichiometry_cdxml as sc
 from ..errors import ChemDrawError, InvalidInputError, TargetNotFoundError
@@ -31,12 +32,12 @@ from ._plumbing import SLOW_TIMEOUT
 WRITE_DIR = os.path.join(tempfile.gettempdir(), "chemdraw-mcp-stoichiometry")
 
 
-def _format_value(value):
-    """SGDataValue's raw attribute format: an integer-looking float is
-    written without a trailing ".0" (confirmed live: Equivalents=1 read
-    back as SGDataValue="1", not "1.0")."""
-    f = float(value)
-    return str(int(f)) if f == int(f) else repr(f)
+# Moved to domain/stoichiometry_cdxml.py as the public format_value --
+# plan_equivalents_cascade needs it too, and it's pure numeric formatting
+# that belongs with the other pure stoichiometry helpers there. Kept as an
+# alias here since existing call sites/tests in this module already refer
+# to it as _format_value.
+_format_value = sc.format_value
 
 
 _STOICH_SUFFIX_RE = re.compile(r"(-stoich-\d{8}-\d{6}-[0-9a-f]{6})+$")
@@ -239,7 +240,7 @@ class _Stoichiometry:
                 continue
         return out
 
-    def read_stoichiometry_tables(self):
+    def read_stoichiometry_tables(self, annotate_expected_mass=False):
         """Read every native Stoichiometry Grid on the active document, via
         CDXML text (the only working access path). Each component is
         annotated with this connector's claude_id (structure_id) where its
@@ -262,7 +263,19 @@ class _Stoichiometry:
         etc.), both values come back null with a "reason" string instead
         of a guess -- see
         domain.stoichiometry_cdxml.compute_derived_yield_fields for the
-        exact bail-out conditions."""
+        exact bail-out conditions.
+
+        annotate_expected_mass=True additionally writes a small "Expected:
+        <mass> g (calc.)" caption under each product structure whose
+        computed_theoretical_mass is non-null, via the same
+        _add_caption_to_unit/tag_caption_owner mechanism arrange_grid/
+        build_scope_table/autonumber already use -- since ChemDraw's own
+        rendered table never shows this number (see above), this is the
+        only way to get it onto the canvas itself. Safe to call repeatedly
+        with the flag on: an existing caption already tagged to a
+        structure with text starting "Expected:" is detected and not
+        duplicated. Returns the newly-annotated structure_ids under
+        "annotated_expected_mass" when the flag is set."""
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)
@@ -271,12 +284,30 @@ class _Stoichiometry:
                 return {"grids": []}
             id_map = self._raw_id_map(doc, cache)
             grids = sc.parse_grids(text)
+
+            # annotate_expected_mass: dedupe against captions this same
+            # feature already added on a prior call, by checking for an
+            # existing caption tagged (via targets.tag_caption_owner, the
+            # same mechanism _add_caption_to_unit always uses) to the
+            # product's structure_id whose text already starts with
+            # "Expected:" -- calling this repeatedly must never stack
+            # duplicate captions on the same structure.
+            annotated_owners = set()
+            if annotate_expected_mass:
+                cap_entries, _ = self._gather_captions(doc)
+                annotated_owners = {
+                    e["tag_owner_id"] for e in cap_entries
+                    if e.get("tag_owner_id") and e.get("text", "").startswith("Expected:")
+                }
+            newly_annotated = []
+
             out_grids = []
             for grid in grids:
                 derived = sc.compute_derived_yield_fields(grid)
                 out_components = []
                 for comp in grid["components"]:
                     ref = comp["structure_ref_id"]
+                    structure_id = id_map.get(ref) if ref else None
                     properties = {
                         v["field"]: {
                             "property_type": k,
@@ -300,9 +331,23 @@ class _Stoichiometry:
                                 "connector_computed": True,
                                 "reason": comp_derived["reason"],
                             }
+                        mass = comp_derived["computed_theoretical_mass"]
+                        if (annotate_expected_mass and mass is not None
+                                and structure_id
+                                and structure_id not in annotated_owners):
+                            try:
+                                unit = targets.find_by_id(doc, structure_id, cache)
+                                cx = (unit.Left + unit.Right) / 2.0
+                                self._add_caption_to_unit(
+                                    doc, unit, f"Expected: {mass:.4f} g (calc.)",
+                                    cx, unit.Bottom + 30.0)
+                                annotated_owners.add(structure_id)
+                                newly_annotated.append(structure_id)
+                            except Exception:
+                                pass  # annotation is a convenience, never fail the read over it
                     out_components.append({
                         "component_index": comp["component_index"],
-                        "structure_id": id_map.get(ref) if ref else None,
+                        "structure_id": structure_id,
                         "is_header": comp["is_header"],
                         "is_reactant": comp["is_reactant"],
                         "properties": properties,
@@ -312,7 +357,10 @@ class _Stoichiometry:
                     "grid_id": grid["grid_id"],
                     "components": out_components,
                 })
-            return {"grids": out_grids}
+            result = {"grids": out_grids}
+            if annotate_expected_mass:
+                result["annotated_expected_mass"] = newly_annotated
+            return result
         return self._run(go)
 
     def edit_stoichiometry_table(self, grid_index, edits):
@@ -340,6 +388,7 @@ class _Stoichiometry:
         keep this to one new window per logical edit, not one per field."""
         def go():
             doc = self._doc()
+            old_name = doc.name
             cache = self._cache_for(doc)
             text = snapshots.export_cdxml_text(doc)
             if text is None:
@@ -382,6 +431,30 @@ class _Stoichiometry:
                 applied.append({"structure_id": structure_id, "field": field,
                                 "value": value})
 
+            # Fold in a recomputed "equivalents" for every reactant in this
+            # grid, into the SAME batch/reopen -- see plan_equivalents_
+            # cascade's own docstring for why this is needed at all
+            # (ChemDraw's own reopen recompute cascades reactant_moles
+            # correctly from an edited sample_mass, but never touches
+            # equivalents, a different sgdatum this connector's edit path
+            # never stamps IsEdited on).
+            structure_id_by_ref = {v: k for k, v in ref_by_structure_id.items()}
+            equivalents_recomputed = []
+            equivalents_recompute_skipped = None
+            target_grid = next((g for g in sc.parse_grids(text)
+                                if g["grid_index"] == grid_index), None)
+            if target_grid is not None:
+                equiv_edits, bail_reason = sc.plan_equivalents_cascade(
+                    target_grid, resolved_edits)
+                resolved_edits += equiv_edits
+                equivalents_recompute_skipped = bail_reason
+                for ee in equiv_edits:
+                    sid = structure_id_by_ref.get(ee["structure_ref_id"])
+                    equivalents_recomputed.append({
+                        "structure_id": sid,
+                        "equivalents": float(ee["new_value"]),
+                    })
+
             try:
                 new_text = sc.apply_edits(text, resolved_edits)
             except ValueError as exc:
@@ -398,21 +471,58 @@ class _Stoichiometry:
 
             new_doc = self._conn.app().Documents.Open(new_path)
             new_doc.Activate()
+            nudge.bring_to_foreground(self._conn.hwnd)
             self._doc_name = new_doc.name
 
-            return {
-                "edits_applied": applied,
-                "new_active_document": new_doc.name,
-                "new_path": new_path,
-                "note": (
+            # Auto-close the OLD window, but only when it's provably a
+            # connector-generated throwaway from a PRIOR edit_stoichiometry_
+            # table call (its own name already carries the "-stoich-
+            # <timestamp>-<hash>" suffix _write_base_name stamps) -- never
+            # the user's original file, which is exempt and left for the
+            # caller to close by hand, same as before. Activate the new
+            # doc FIRST (already done above) so _close_document_now's own
+            # `was_active` check for old_name reads False, meaning its
+            # issue-2 active-document fallback logic won't fire and can't
+            # clobber the self._doc_name we already set to the new doc.
+            old_base = re.sub(r"\.cdxml$", "", old_name or "", flags=re.IGNORECASE)
+            is_throwaway = bool(_STOICH_SUFFIX_RE.search(old_base))
+            auto_closed = None
+            if is_throwaway:
+                try:
+                    self._close_document_now(old_name, discard_changes=True)
+                    auto_closed = old_name
+                except Exception:
+                    auto_closed = None  # cleanup failure must never fail a successful edit
+
+            if auto_closed:
+                note = (
+                    "A NEW ChemDraw document window was opened from the "
+                    "edited file -- Document.Close() and reopening the "
+                    "same path in place are both confirmed no-ops on this "
+                    "ChemDraw version, so there is no way to refresh the "
+                    f"original window instead. The previous window ({old_name!r}"
+                    ", itself a throwaway from an earlier edit) was closed "
+                    "automatically -- no chemdraw_close_document call needed."
+                )
+            else:
+                note = (
                     "A NEW ChemDraw document window was opened from the "
                     "edited file -- Document.Close() and reopening the "
                     "same path in place are both confirmed no-ops on this "
                     "ChemDraw version, so there is no way to refresh the "
                     "original window instead. Call chemdraw_close_document "
-                    f"on {doc.name!r} (discard_changes=true, since it's "
+                    f"on {old_name!r} (discard_changes=true, since it's "
                     "now superseded by the new window) if you no longer "
                     "need it."
-                ),
+                )
+
+            return {
+                "edits_applied": applied,
+                "equivalents_recomputed": equivalents_recomputed,
+                "equivalents_recompute_skipped": equivalents_recompute_skipped,
+                "new_active_document": new_doc.name,
+                "new_path": new_path,
+                "auto_closed_previous_document": auto_closed,
+                "note": note,
             }
         return self._run(go, timeout=SLOW_TIMEOUT)

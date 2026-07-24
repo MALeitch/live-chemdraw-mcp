@@ -292,6 +292,14 @@ def _float_or_none(value):
         return None
 
 
+def format_value(value):
+    """SGDataValue's raw attribute format: an integer-looking float is
+    written without a trailing ".0" (confirmed live: Equivalents=1 read
+    back as SGDataValue="1", not "1.0")."""
+    f = float(value)
+    return str(int(f)) if f == int(f) else repr(f)
+
+
 def compute_derived_yield_fields(grid):
     """CONNECTOR-COMPUTED (NOT a ChemDraw-native value -- never read from or
     written back to ChemDraw itself), real theoretical_mass/%yield for
@@ -400,6 +408,146 @@ def compute_derived_yield_fields(grid):
             "reason": None,
         }
     return out
+
+
+# Reactant fields whose edit changes what a reactant's moles WILL be after
+# reopen, and therefore every reactant's "equivalents" in the same grid.
+# NOTE, known gap: density/volume edits trigger this gate (so the batch is
+# not silently skipped) but plan_equivalents_cascade's post_moles logic
+# below only actually RECOMPUTES from sample_mass/percent_weight/
+# reactant_moles -- a density- or volume-only edit (no accompanying
+# sample_mass edit) falls through to that reactant's stale current(r, 13)
+# rather than a freshly-derived value, since this connector has no
+# confirmed density*volume -> mass formula to mirror ChemDraw's own here.
+# Narrow blast radius (only wrong if that specific reactant is itself the
+# limiting reagent, or needs its own equivalents updated) but a real,
+# documented-not-silently-claimed limitation, not a fixed gap.
+MOLES_AFFECTING_FIELDS = frozenset({"sample_mass", "reactant_moles", "density", "volume",
+                                    "percent_weight"})
+
+
+def plan_equivalents_cascade(grid, pending_edits):
+    """Given one already-parsed grid (a parse_grids(...) entry) and the
+    batch of edits about to be applied to it (same dict shape apply_edits
+    takes -- grid_index/structure_ref_id/property_type/new_value/
+    new_display_text), return (equiv_edits, bail_reason): additional edits
+    to fold into that same apply_edits batch so "equivalents"
+    (SGPropertyType 6) comes out correct on the very same reopen.
+
+    Exists because ChemDraw's own on-reopen recompute correctly cascades
+    an edited sample_mass into reactant_moles (confirmed live, see
+    apply_edit's docstring) but leaves equivalents untouched -- it's a
+    DIFFERENT sgdatum on the same component that this connector's edit
+    path never stamps IsEdited on, so it stays whatever it was before
+    (usually the unedited default "1.00" for every reactant), even though
+    reactant_moles updates correctly in the same reopened document.
+
+    Limiting-reagent resolution deliberately mirrors
+    compute_derived_yield_fields's own established convention exactly,
+    for consistency: a reactant is limiting iff its raw SGDataValue for
+    SGPropertyType 4 is "1". Exactly one such reactant is required; zero
+    or multiple flagged reactants means the single-limiting-reagent
+    assumption this needs doesn't hold, so this BAILS (equiv_edits=[],
+    bail_reason=<why>) rather than guessing via smallest-moles or any
+    other heuristic -- same "never guess" precedent
+    compute_derived_yield_fields already established for this exact
+    ambiguity.
+
+    equiv_edits is empty with bail_reason=None (not an error, just
+    "nothing to do") when: fewer than 2 reactants are in the grid, or the
+    edit batch touches no MOLES_AFFECTING_FIELDS for any reactant in this
+    grid. A reactant already the target of an explicit "equivalents" edit
+    in the same batch is left alone (that edit wins, never overridden). A
+    reactant whose own post-edit moles can't be determined (missing/
+    unparseable molecular_weight, say) is individually skipped -- not a
+    whole-grid bail, since the other reactants can still be computed
+    correctly."""
+    reactants = [c for c in grid["components"]
+                if not c["is_header"] and c["is_reactant"]]
+    grid_edits = [e for e in pending_edits if e["grid_index"] == grid["grid_index"]]
+
+    def field_of(edit):
+        return SG_PROPERTY_FIELDS.get(edit["property_type"], f"type_{edit['property_type']}")
+
+    if len(reactants) < 2:
+        return [], None  # nothing to recompute relative to
+    if not any(field_of(e) in MOLES_AFFECTING_FIELDS for e in grid_edits):
+        return [], None  # batch doesn't touch anything equivalents depends on
+
+    edit_val = {(e["structure_ref_id"], field_of(e)): e["new_value"] for e in grid_edits}
+
+    def current(comp, ptype):
+        return _float_or_none(comp["properties"].get(ptype, {}).get("value"))
+
+    post_moles = {}
+    for r in reactants:
+        ref = r["structure_ref_id"]
+        if (ref, "reactant_moles") in edit_val:
+            post_moles[ref] = _float_or_none(edit_val[(ref, "reactant_moles")])
+        elif (ref, "sample_mass") in edit_val or (ref, "percent_weight") in edit_val:
+            mw = current(r, 2)
+            mass = _float_or_none(edit_val.get((ref, "sample_mass")))
+            if mass is None:
+                mass = current(r, 7)  # sample_mass unedited here, only percent_weight changed
+            pct = _float_or_none(edit_val.get((ref, "percent_weight")))
+            if pct is None:
+                pct = current(r, 8)
+            if pct is None:
+                pct = 1.0  # ChemDraw's own default (100%) when the reactant has no %Weight set at all
+            # reactant_moles' raw SGDataValue is in MOL (confirmed live:
+            # "0.002" reads back as display text "2.00mmol"), matching
+            # plain mass(g) / molecular_weight(g/mol) directly -- no *1000
+            # conversion factor, since that's already mol, not mmol. mass
+            # here is the AS-WEIGHED sample_mass (e.g. a 60wt% NaH
+            # dispersion's full weighed mass, not just the pure NaH in it)
+            # -- multiplying by percent_weight (ChemDraw's own %Weight/
+            # purity field, e.g. 0.6 for a 60% dispersion) first is required
+            # to get the PURE reagent mass ChemDraw itself actually divides
+            # by molecular_weight; skipping this inflated equivalents by
+            # 1/percent_weight for any reactant with percent_weight != 1
+            # (confirmed live: a 60%-purity NaH row came back as 1.84 eq
+            # instead of the correct ~1.10 before this factor was added).
+            post_moles[ref] = (mass * pct / mw) if (mw and mass is not None) else None
+        else:
+            post_moles[ref] = current(r, 13)  # untouched reactant: current parsed value is post-edit truth
+
+    # Same raw-value check as compute_derived_yield_fields (see its own
+    # comment): "1" is the real SGDataValue, "Yes" is only the display text.
+    limiting = [c for c in reactants if c["properties"].get(4, {}).get("value") == "1"]
+    if len(limiting) != 1:
+        if not limiting:
+            reason = ("no reactant component is flagged limiting_reagent "
+                      "(SGPropertyType 4 raw value == '1')")
+        else:
+            reason = (f"{len(limiting)} reactant components are flagged "
+                      "limiting_reagent -- expected exactly 1")
+        return [], reason
+
+    limiting_ref = limiting[0]["structure_ref_id"]
+    limiting_moles = post_moles.get(limiting_ref)
+    if not limiting_moles:
+        return [], "limiting reagent's post-edit reactant_moles is zero/unknown"
+
+    explicit_equiv_refs = {e["structure_ref_id"] for e in grid_edits
+                           if field_of(e) == "equivalents"}
+
+    equiv_edits = []
+    for r in reactants:
+        ref = r["structure_ref_id"]
+        if ref in explicit_equiv_refs:
+            continue  # caller's own explicit equivalents edit wins, never overridden
+        moles = post_moles.get(ref)
+        if moles is None:
+            continue  # can't compute this one; leave its equivalents as-is rather than guess
+        equiv = moles / limiting_moles
+        equiv_edits.append({
+            "grid_index": grid["grid_index"],
+            "structure_ref_id": ref,
+            "property_type": 6,
+            "new_value": format_value(equiv),
+            "new_display_text": f"{equiv:.2f}",
+        })
+    return equiv_edits, None
 
 
 _TAG_RE = re.compile(r'<(/?)(stoichiometrygrid|sgcomponent|sgdatum)\b')

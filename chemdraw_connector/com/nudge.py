@@ -94,3 +94,60 @@ def nudge_escape(preferred_hwnd=None):
         except Exception:
             continue
     return nudged
+
+
+def bring_to_foreground(hwnd):
+    """Force one ChemDraw top-level frame window to the OS foreground and
+    un-minimize it.
+
+    CONFIRMED LIVE (2026-07-24): `doc.Activate()` over COM only updates
+    ChemDraw's own internal notion of which MDI child document is active --
+    it does not touch the CSWFrame's actual window state. Called from this
+    connector's background process (not the OS foreground app), that COM
+    call left a document's content fully correct and queryable while the
+    window itself never visibly appeared to the user, and separately
+    correlates with the `ActiveDocument` COM property intermittently
+    returning None even for a document just activated (see
+    bridge/_plumbing.py's `_doc()` docstring for that quirk, previously
+    worked around there by remembering the doc name rather than fixing the
+    underlying focus problem) -- consistent with ChemDraw's own idea of
+    "active document" being tied to real window focus, which a bare
+    doc.Activate() from a background process never establishes.
+
+    SetForegroundWindow alone is normally denied by Windows' foreground-lock
+    when the caller isn't already the OS-foreground process (the standard
+    protection against background apps stealing focus) -- so the fallback
+    below attaches this process's input queue to the current foreground
+    window's owning thread first, which is the standard, well-documented way
+    to get Windows to actually honor the request; it detaches again
+    immediately after regardless of the outcome.
+
+    Best-effort and silent: every failure is swallowed. By the time this
+    runs, the caller's real COM work (open/activate/save) has already
+    succeeded -- losing window focus here is a UX regression, not a
+    correctness one, so it must never surface as an error.
+    """
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return False
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
+            pass
+        cur_thread = win32api.GetCurrentThreadId()
+        fg_hwnd = win32gui.GetForegroundWindow()
+        fg_thread = win32process.GetWindowThreadProcessId(fg_hwnd)[0] if fg_hwnd else 0
+        attached = False
+        try:
+            if fg_thread and fg_thread != cur_thread:
+                attached = win32process.AttachThreadInput(cur_thread, fg_thread, True)
+            win32gui.SetForegroundWindow(hwnd)
+            return True
+        finally:
+            if attached:
+                win32process.AttachThreadInput(cur_thread, fg_thread, False)
+    except Exception:
+        return False
