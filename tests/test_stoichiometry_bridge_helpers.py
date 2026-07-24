@@ -63,7 +63,7 @@ _CDXML_WITH_LIMITING_REAGENT_AND_PRODUCT = """<?xml version="1.0" ?>
   <sgdatum id="131840" SGDataType="3" SGDataValue="46.069" SGPropertyType="2" IsReadOnly="yes">
    <objecttag id="153"><t p="0 0"><s>46.07</s></t></objecttag>
   </sgdatum>
-  <sgdatum id="131900" SGDataType="4" SGDataValue="Yes" SGPropertyType="4" IsReadOnly="yes">
+  <sgdatum id="131900" SGDataType="4" SGDataValue="1" SGPropertyType="4" IsReadOnly="yes">
    <objecttag id="154"><t p="0 0"><s>Yes</s></t></objecttag>
   </sgdatum>
   <sgdatum id="131950" SGDataType="3" SGDataValue="0.14690" SGPropertyType="13" IsReadOnly="yes">

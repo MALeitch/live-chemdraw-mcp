@@ -279,6 +279,15 @@ def _prop(value):
             "text": None, "editable": True, "visible": True}
 
 
+# SGPropertyType 4's raw SGDataValue is "1"/"0" -- "Yes"/"No" is only the
+# rendered display text (see stoichiometry_cdxml.py's own fix/comment on
+# this exact confusion, confirmed live 2026-07-23: fixtures using "Yes"/
+# "No" here previously matched the implementation's own bug instead of
+# real ChemDraw data, so both passed together despite being wrong.
+_LIMITING = _prop("1")
+_NOT_LIMITING = _prop("0")
+
+
 def _grid_dict(components):
     return {"grid_index": 0, "grid_id": "1", "components": components}
 
@@ -287,10 +296,10 @@ def test_compute_derived_yield_fields_happy_path():
     grid = _grid_dict([
         _component(0, is_header=True, is_reactant=True),
         _component(1, is_reactant=True, properties={
-            4: _prop("Yes"),       # limiting_reagent
+            4: _LIMITING,       # limiting_reagent
             13: _prop("0.14690"),  # reactant_moles (mol)
         }),
-        _component(2, is_reactant=True, properties={4: _prop("No")}),
+        _component(2, is_reactant=True, properties={4: _NOT_LIMITING}),
         _component(3, properties={
             2: _prop("136.15"),    # molecular_weight
             17: _prop("0.02108"),  # actual_mass -- deliberately off theoretical
@@ -306,7 +315,7 @@ def test_compute_derived_yield_fields_happy_path():
 
 def test_compute_derived_yield_fields_bails_out_with_no_limiting_reagent():
     grid = _grid_dict([
-        _component(1, is_reactant=True, properties={4: _prop("No")}),
+        _component(1, is_reactant=True, properties={4: _NOT_LIMITING}),
         _component(2, properties={2: _prop("100"), 17: _prop("1")}),
     ])
     derived = sc.compute_derived_yield_fields(grid)
@@ -317,8 +326,8 @@ def test_compute_derived_yield_fields_bails_out_with_no_limiting_reagent():
 
 def test_compute_derived_yield_fields_bails_out_with_multiple_limiting_reagents():
     grid = _grid_dict([
-        _component(1, is_reactant=True, properties={4: _prop("Yes"), 13: _prop("1")}),
-        _component(2, is_reactant=True, properties={4: _prop("Yes"), 13: _prop("1")}),
+        _component(1, is_reactant=True, properties={4: _LIMITING, 13: _prop("1")}),
+        _component(2, is_reactant=True, properties={4: _LIMITING, 13: _prop("1")}),
         _component(3, properties={2: _prop("100"), 17: _prop("1")}),
     ])
     derived = sc.compute_derived_yield_fields(grid)
@@ -328,7 +337,7 @@ def test_compute_derived_yield_fields_bails_out_with_multiple_limiting_reagents(
 
 def test_compute_derived_yield_fields_bails_out_when_limiting_reagent_has_no_moles():
     grid = _grid_dict([
-        _component(1, is_reactant=True, properties={4: _prop("Yes")}),  # no type 13
+        _component(1, is_reactant=True, properties={4: _LIMITING}),  # no type 13
         _component(2, properties={2: _prop("100"), 17: _prop("1")}),
     ])
     derived = sc.compute_derived_yield_fields(grid)
@@ -338,7 +347,7 @@ def test_compute_derived_yield_fields_bails_out_when_limiting_reagent_has_no_mol
 
 def test_compute_derived_yield_fields_bails_out_when_product_missing_molecular_weight():
     grid = _grid_dict([
-        _component(1, is_reactant=True, properties={4: _prop("Yes"), 13: _prop("0.1")}),
+        _component(1, is_reactant=True, properties={4: _LIMITING, 13: _prop("0.1")}),
         _component(2, properties={17: _prop("1")}),  # no type 2
     ])
     derived = sc.compute_derived_yield_fields(grid)
@@ -348,7 +357,7 @@ def test_compute_derived_yield_fields_bails_out_when_product_missing_molecular_w
 
 def test_compute_derived_yield_fields_still_reports_theoretical_mass_without_actual_mass():
     grid = _grid_dict([
-        _component(1, is_reactant=True, properties={4: _prop("Yes"), 13: _prop("0.1")}),
+        _component(1, is_reactant=True, properties={4: _LIMITING, 13: _prop("0.1")}),
         _component(2, properties={2: _prop("100")}),  # no type 17
     ])
     derived = sc.compute_derived_yield_fields(grid)
@@ -359,7 +368,7 @@ def test_compute_derived_yield_fields_still_reports_theoretical_mass_without_act
 
 def test_compute_derived_yield_fields_returns_empty_dict_with_no_products():
     grid = _grid_dict([
-        _component(1, is_reactant=True, properties={4: _prop("Yes"), 13: _prop("0.1")}),
+        _component(1, is_reactant=True, properties={4: _LIMITING, 13: _prop("0.1")}),
     ])
     assert sc.compute_derived_yield_fields(grid) == {}
 

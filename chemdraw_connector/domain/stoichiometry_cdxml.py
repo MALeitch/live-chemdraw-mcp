@@ -340,12 +340,19 @@ def compute_derived_yield_fields(grid):
             "reason": reason,
         } for p in product_comps}
 
+    # SGPropertyType 4's raw SGDataValue is "1"/"0" (see
+    # SG_PROPERTY_FIELDS[4] and _sgdatum_text) -- "Yes"/"No" is only the
+    # rendered display TEXT, never the raw value. Comparing against
+    # "value" == "Yes" here was confirmed live to always be False (a
+    # genuinely limiting reactant's raw value is "1"), silently bailing
+    # out on every real grid regardless of whether a limiting reagent was
+    # actually flagged.
     limiting = [c for c in reactant_comps
-                if c["properties"].get(4, {}).get("value") == "Yes"]
+                if c["properties"].get(4, {}).get("value") == "1"]
     if len(limiting) != 1:
         if not limiting:
             reason = ("no reactant component is flagged limiting_reagent "
-                       "(SGPropertyType 4 == 'Yes')")
+                       "(SGPropertyType 4 raw value == '1')")
         else:
             reason = (f"{len(limiting)} reactant components are flagged "
                       "limiting_reagent -- expected exactly 1")
