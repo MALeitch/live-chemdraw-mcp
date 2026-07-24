@@ -5,7 +5,7 @@ import os
 
 from .. import snapshots, state, targets
 from ..domain import canvas, diff, layout_math, mojibake, numbering
-from ..errors import InvalidInputError
+from ..errors import InvalidInputError, TargetNotFoundError
 from ._plumbing import SLOW_TIMEOUT
 
 
@@ -335,6 +335,90 @@ class _Layout:
                           "right": round(g.Right, 1), "bottom": round(g.Bottom, 1)},
             })
         return boxes
+
+    def _move_annotation(self, kind, obj, dx, dy):
+        """Translate one free-floating annotation object (arrow, caption,
+        symbol, bracket, tlc_plate) by (dx, dy) points — the annotation
+        counterpart of a structure unit's `.Move(dx, dy)` (see
+        move_objects/transform), used once target resolution (see
+        targets.resolve_any/find_removable_by_id) hands back a non-
+        "structure" kind.
+
+        None of these object kinds expose a relative Move() of their own
+        (only Groups/Fragments do, via unit_objects(unit).Move — confirmed
+        live, and unlike them these are plain COM objects, not an
+        IChemDrawObjects collection) — every one only supports absolute
+        positional properties, so the dx/dy contract is translated here to
+        "read the current position(s), add the delta, write back",
+        reusing exactly the point-mutation pattern already proven live
+        elsewhere in this codebase for each kind's own creation code (see
+        _annotations.py's make_arrow/make_symbol,
+        _specialty_objects.py's make_bracket/make_tlc_plate) rather than
+        guessing at one:
+
+          - caption, symbol: a single `.Position` point is the object's
+            true anchor — same pattern _correct_caption_positions already
+            uses for captions, reused via self._set_position.
+          - arrow, bracket: `.Start`/`.End`, two INDEPENDENT points, both
+            must be translated by the same delta to move the whole object
+            without distorting it. Touching only `.Position` would not
+            do that — confirmed live (see make_reaction_scheme's
+            docstring), Arrow.Position is not a separate property, it
+            ALIASES `.End`, so writing it alone would drag just one
+            endpoint and stretch/rotate the arrow instead of moving it.
+            Bracket shares the same Start/End shape (see make_bracket).
+          - tlc_plate: FOUR independent corner points (TopLeft/TopRight/
+            BottomLeft/BottomRight, see make_tlc_plate) — all four must be
+            translated together for a rigid, undistorted move.
+
+        Returns True on success, False if the object's positional
+        properties couldn't be read/written (never raises — one
+        unmovable annotation in a batch must not abort the rest, mirrors
+        _set_position's own bool-return, swallow-and-report contract)."""
+        try:
+            if kind in ("caption", "symbol"):
+                pos = obj.Position
+                return self._set_position(obj, pos.X + dx, pos.Y + dy)
+            if kind in ("arrow", "bracket"):
+                sp = obj.Start
+                sp.X, sp.Y = sp.X + dx, sp.Y + dy
+                obj.Start = sp
+                ep = obj.End
+                ep.X, ep.Y = ep.X + dx, ep.Y + dy
+                obj.End = ep
+                return True
+            if kind == "tlc_plate":
+                for prop in ("TopLeft", "TopRight", "BottomLeft", "BottomRight"):
+                    p = getattr(obj, prop)
+                    p.X, p.Y = p.X + dx, p.Y + dy
+                    setattr(obj, prop, p)
+                return True
+        except Exception:
+            return False
+        return False  # unknown kind -- treated as "could not move", not a crash
+
+    @staticmethod
+    def _annotation_bounds(obj):
+        """Best-effort Left/Top/Right/Bottom bounding box for an
+        annotation object, the same shape state.describe_unit/
+        _gather_captions/list_tlc_plates already return for structures/
+        captions/tlc_plates — used by move_objects to report
+        resulting_bounds and check off_page violations for a moved
+        annotation, since state.build_snapshot (CDXML-export-based) only
+        ever covers structure units (targets.iter_units), not
+        doc.Arrows/Captions/Symbols/Brackets/TLCPlates. Confirmed live
+        that Caption and TLCPlate expose plain Left/Top/Right/Bottom
+        (see _gather_captions, list_tlc_plates above); Arrow/Symbol/
+        Bracket are expected to share the same base-object bounds
+        properties but aren't independently confirmed here, hence the
+        try/except returning None rather than raising — a missing bounds
+        reading degrades to "not checked", not a hard failure of the
+        move itself."""
+        try:
+            return {"left": round(obj.Left, 1), "top": round(obj.Top, 1),
+                    "right": round(obj.Right, 1), "bottom": round(obj.Bottom, 1)}
+        except Exception:
+            return None
 
     def _correct_caption_positions(self, cap_entries, cap_objs, owner_ids,
                                    deltas):
@@ -777,6 +861,22 @@ class _Layout:
         object that moved WITHOUT being requested is reported back
         immediately as `unexpected_moves` — caught by the tool, not
         discovered later in a screenshot.
+
+        object_id also accepts an arrow, symbol, bracket, tlc_plate, or
+        (owned or unowned) caption id — not just a structure's — via
+        targets.find_annotation_by_id_any (see targets.find_removable_by_id's
+        docstring for the "missing"/wrong-error bug this closes). These
+        move through self._move_annotation, not Move(dx, dy) (they have no
+        such method — see that helper's docstring for why). KNOWN GAP:
+        `unexpected_moves`/`diff` above are computed from
+        state.build_snapshot, which — like iter_units — only ever covers
+        structure units; an annotation being unexpectedly dragged along by
+        something else (not currently known to happen, unlike the
+        structure/counterion case above) would NOT be caught by that
+        check. resulting_bounds and the off_page violation check below ARE
+        extended to cover moved annotations directly (see
+        self._annotation_bounds), so at minimum an annotation moved off
+        the page is still reported.
         """
         def go():
             doc = self._doc()
@@ -792,19 +892,40 @@ class _Layout:
 
             # Resolve every target ONCE via a single document-wide scan,
             # not once per move (same lesson as contract_functional_groups'
-            # earlier find_by_id-per-pass inefficiency).
+            # earlier find_by_id-per-pass inefficiency). Only covers
+            # structures -- an id that misses here falls through to the
+            # annotation lookup per-move below (iter_annotations is
+            # deliberately uncached, see its docstring, so there is no
+            # equivalent single-scan dict to build for it up front).
             by_id = {targets.ensure_id(u): u for u in targets.iter_units(doc, self._cache_for(doc))}
             applied, missing, deltas = [], [], {}
+            annotation_objs = {}  # object_id -> (kind, obj), for bounds reads below
             for mv in moves:
                 oid = mv["object_id"]
+                dx, dy = mv.get("dx", 0.0), mv.get("dy", 0.0)
                 unit = by_id.get(oid)
-                if unit is None:
+                if unit is not None:
+                    targets.unit_objects(unit).Move(dx, dy)
+                    applied.append(oid)
+                    deltas[oid] = (dx, dy)
+                    continue
+                try:
+                    kind, obj = targets.find_annotation_by_id_any(doc, oid)
+                except TargetNotFoundError:
                     missing.append(oid)
                     continue
-                dx, dy = mv.get("dx", 0.0), mv.get("dy", 0.0)
-                targets.unit_objects(unit).Move(dx, dy)
+                # Found but the move itself failed (its positional
+                # properties couldn't be read/written -- see
+                # _move_annotation) -- reported the same way as "not
+                # found" since move_objects has no separate per-item
+                # failure list (unlike transform's `failed`); either way
+                # the object simply isn't in `applied`.
+                if not self._move_annotation(kind, obj, dx, dy):
+                    missing.append(oid)
+                    continue
                 applied.append(oid)
                 deltas[oid] = (dx, dy)
+                annotation_objs[oid] = (kind, obj)
 
             carried = corrected = 0
             if move_with_captions:
@@ -819,7 +940,10 @@ class _Layout:
             touched = list(requested_ids | {m["id"] for m in unexpected})
             touched_boxes, touched_ids = [], []
             for oid in touched:
-                b = after_by_id.get(oid, {}).get("bounds")
+                if oid in annotation_objs:
+                    b = self._annotation_bounds(annotation_objs[oid][1])
+                else:
+                    b = after_by_id.get(oid, {}).get("bounds")
                 if b:
                     touched_boxes.append(layout_math.Box(**b))
                     touched_ids.append(oid)
@@ -850,7 +974,9 @@ class _Layout:
                 "captions_carried": carried,
                 "captions_corrected": corrected,
                 "resulting_bounds": {
-                    oid: after_by_id.get(oid, {}).get("bounds")
+                    oid: (self._annotation_bounds(annotation_objs[oid][1])
+                          if oid in annotation_objs
+                          else after_by_id.get(oid, {}).get("bounds"))
                     for oid in applied
                 },
                 "unexpected_moves": unexpected,

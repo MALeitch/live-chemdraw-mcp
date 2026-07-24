@@ -156,6 +156,55 @@ class _Plumbing:
 
     @staticmethod
     def _insert_raw(objs, mime, payload):
+        """Worker thread only. `payload` is UTF-8-encoded to bytes before
+        the COM property-put, never handed over as a Python str.
+
+        CONFIRMED LIVE (data-loss bug, not cosmetic): a CDXML text payload
+        built by domain/reagent_text.build_text_cdxml containing a
+        character outside cp1252's repertoire (the rightwards arrow
+        U+2192, e.g. in a conditions_text of "0 C->rt") came back from a
+        round trip through this call as a literal "?" actually stored in
+        the live document -- confirmed via chemdraw_describe_canvas after
+        the insert, not just a rendering artifact. A character cp1252 DOES
+        cover (the degree sign, U+00B0, in the same string) survived
+        intact, which is what isolates the mechanism: passing `payload` as
+        a plain Python str lets pywin32 marshal it as a BSTR (UTF-16), and
+        ChemDraw's own Data-property setter for text mime types narrows
+        that incoming BSTR to the system ANSI codepage before its CDXML
+        parser ever runs -- any character outside that codepage is lost
+        (replaced with '?') right there, upstream of and regardless of
+        whatever encoding the CDXML prolog itself declares. This is the
+        write-side mirror of the ALREADY-DIAGNOSED, DIFFERENT read-side bug
+        in domain/mojibake.py (there, ChemDraw's internal UTF-8 bytes get
+        WIDENED via the system codepage on the way OUT over COM, producing
+        reversible double-encoding mojibake, not data loss); the fix here
+        is the opposite direction and not reversible after the fact, so it
+        has to be avoided rather than repaired.
+
+        Passing `payload` as bytes instead makes pywin32 marshal it as a
+        byte-array VARIANT rather than a BSTR, which is the same
+        byte-oriented path already proven lossless for binary Data in this
+        codebase (see _com_bytes/_com_text above handling a memoryview
+        GetData result for binary mime types like image/png) -- it hands
+        ChemDraw the actual UTF-8 bytes to parse per the CDXML prolog's own
+        encoding="UTF-8" declaration (see build_text_cdxml) instead of a
+        wide string ChemDraw narrows through cp1252 first. Every payload
+        through this call is plain text today (SMILES/molfile/name/CDXML
+        strings -- see _insert_structure_units and _reaction.py's
+        _make_annotation_caption, the only two callers), so the str check
+        below is a forward-compatibility guard, not evidence a caller ever
+        needs to pass bytes itself.
+
+        NOT independently confirmed against a live ChemDraw session (the
+        live document has real unsaved user work right now) -- confirmed
+        via code-level reasoning plus the existing pure-Python test suite
+        (tests/test_reagent_text.py's payload-shape assertions) rather than
+        an actual round trip. Manual live verification still needed: build
+        a scheme with conditions_text containing U+2192, read it back via
+        chemdraw_describe_canvas, and confirm the arrow (not "?") comes
+        back."""
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
         raw = objs._oleobj_
         dispid = raw.GetIDsOfNames(0, "Data")
         raw.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYPUT, 0, mime, payload)

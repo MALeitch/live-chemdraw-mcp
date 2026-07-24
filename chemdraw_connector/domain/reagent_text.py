@@ -60,7 +60,29 @@ def build_text_cdxml(runs, x, y, width, height, font=3, size=10.0, color=0):
     after insertion, exactly like every other insertion in this codebase
     already does. font/size/color match ChemDraw's own caption defaults
     (CaptionFont=3, CaptionSize=10 in this project's documents) unless
-    overridden."""
+    overridden.
+
+    The prolog explicitly declares encoding="UTF-8" -- confirmed live to
+    matter, not cosmetic: a caption built from a segment containing a
+    character outside cp1252's repertoire (the rightwards arrow U+2192 in
+    "0 C->rt", used as a temperature-range separator) came back from a
+    round trip (build -> insert -> chemdraw_describe_canvas) as a literal
+    "?" in the live document -- real data loss, not just a display glitch
+    (the degree sign, U+00B0, IS in cp1252 and survived fine, isolating
+    the failure to characters outside that specific repertoire rather
+    than "any non-ASCII character"). Root cause: ChemDraw's Data-property
+    setter for this mime type narrows an incoming COM BSTR (UTF-16) to
+    the system ANSI codepage before its CDXML parser ever runs, so a
+    missing/implicit encoding declaration was never the mechanism -- it
+    doesn't matter what a prolog claims once the codepage narrowing has
+    already substituted the character. Declaring encoding="UTF-8" here is
+    the correct half of the real fix and is necessary once the payload is
+    actually delivered as UTF-8 bytes (see bridge/_plumbing.py's
+    _insert_raw, which now encodes the payload as UTF-8 bytes rather than
+    handing ChemDraw a Python str -- that's what avoids the lossy BSTR
+    narrowing in the first place); declaring it without that companion
+    change would leave the prolog correct but unable to prevent the
+    corruption upstream of it."""
     spans = "".join(
         f'<s font="{font}" size="{size}"'
         + (f' face="{FACE_SUBSCRIPT}"' if is_sub else "")
@@ -68,7 +90,7 @@ def build_text_cdxml(runs, x, y, width, height, font=3, size=10.0, color=0):
         for segment, is_sub in runs if segment
     )
     return (
-        '<?xml version="1.0" ?>'
+        '<?xml version="1.0" encoding="UTF-8" ?>'
         '<!DOCTYPE CDXML SYSTEM '
         '"https://static.chemistry.revvitycloud.com/cdxml/CDXML.dtd">'
         '<CDXML><page>'

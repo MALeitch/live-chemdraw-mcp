@@ -63,26 +63,138 @@ that showed a real, visibly-rendered value matching what was actually
 typed/computed; MEDIUM for ones whose only evidence is a plausible unit
 suffix on a default/zero value that was never actually populated; every
 other numeric SGPropertyType is exposed under a synthetic "type_N" field
-name rather than guessed at (types 3/11 were never observed in this
-reactants-only test -- most likely product-side fields: theoretical
-yield/actual yield/percent yield).
+name rather than guessed at.
+
+PRODUCT-SIDE fields (15-22) were a separate, later investigation --
+2026-07-23, live probe against a real reactant-left/product-right/arrow-
+between scheme (ethanol + benzene -> phenyl acetate). CRITICAL FINDING that
+motivated this second pass: a product component uses a COMPLETELY DIFFERENT
+SGPropertyType numbering than a reactant one -- there is no single global
+"Sample Mass" code shared by both roles. The two share only type 6
+(Equivalents). ComponentIsReactant itself is absent entirely (not "no") on
+a genuine product component; parse_grids's `comp.get("ComponentIsReactant")
+== "yes"` already handles that correctly (`None == "yes"` is False) -- the
+long-standing "everything reads back as a reactant" bug was never in this
+parsing code, it was in bridge/_stoichiometry.py drawing its own arrow
+below the combined bounding box of every given structure instead of
+between a reactant cluster and a product cluster (see that module's
+make_stoichiometry_table for the fix and the full geometry rationale).
+
+Confirmed live, two separate trials (23.035g/68.075g at exactly the
+theoretical 1:1 ratio, then again at 10.0g/20.0g -- deliberately NOT at the
+theoretical ratio the second time, to break the degeneracy where every
+hypothesis looks identical at 100% yield):
+  - type 17 (editable) is the input: set to 20.0, read back as 20.0.
+  - type 19 (IsReadOnly) exactly mirrored type 17 in both trials (68.075
+    both times, then 20 both times) -- a read-only display copy of
+    whatever was typed into 17, not an independently-computed value.
+  - type 20 (IsReadOnly) was 20/136.15 = 0.146897 in the second trial --
+    exactly the moles implied by type 17's mass over the structure's own
+    MW (property_type 2), i.e. genuinely computed, not just mirrored.
+  - types 15/16 (IsReadOnly) stayed "0" in BOTH trials despite the
+    limiting reactant's own sample_mass being set to a real nonzero value
+    beforehand (so a theoretical-yield calculation had a real basis to
+    work from) -- never observed to populate via the edit-CDXML-and-
+    reopen write path this connector uses. The reactant-side "Limit
+    Moles" field (type 5) shows the exact same stuck-at-zero symptom on
+    every component regardless of role, suggesting a shared root cause:
+    whatever ChemDraw computation these depend on may only run inside the
+    live interactive table engine (recalculated as a human edits a cell
+    in the UI), not during the on-file-load recompute pass that picks up
+    every other edited SGDataValue correctly. Named here as a working
+    hypothesis (LOW confidence) rather than left as type_15/type_16,
+    since "theoretical yield mass/moles" is the only chemically sensible
+    pair of read-only fields a product row would need beyond what 17/19/
+    20 already cover -- but treat any value read from these as suspect
+    until this connector's own write path is confirmed to make them move.
+  - type 18 (editable, %) and type 22 (editable, %) both stayed at their
+    "1" (100%) default in both trials and were never observed to actually
+    recompute from a real, non-100%, actual-vs-theoretical yield -- same
+    caveat as 15/16. Named by position/shape only (an editable "%" field
+    sitting where a %Yield input belongs, appearing once per component
+    right after Equivalents; 22 for products, 8 for the reactant
+    equivalent already documented above) -- LOW-MEDIUM confidence, not
+    cascade-verified. [SUPERSEDED for type 18 below -- see the
+    2026-07-23-part-2 finding.]
+  - type 21 (IsReadOnly) stayed "0" in both trials with no working
+    hypothesis at all -- left unmapped (type_21) rather than guessed.
+
+CORRECTION, 2026-07-23 (part 2), live-confirmed: type 18 is NOT %Yield --
+it's ChemDraw's own "Purity" field. Confirmed straight from ChemDraw
+itself, not guessed: a live COM property read via
+chemdraw_read_stoichiometry_table on the header component labeled
+property_type 18 as `"value": "Purity", "text": "Purity"` verbatim. It also
+functions exactly like a purity multiplier, confirmed by cascade (not just
+label): with actual_mass (type 17) set to 0.2108 (211mg, a real isolated
+mass) and type 18 set to 0.47 (intending "47% yield"), the read-only
+actual_mass_display (type 19, "Product Mass" in ChemDraw's UI, previously
+documented above as HIGH confidence to mirror type 17 exactly) instead
+came back as 0.099076 (99mg) -- i.e. ChemDraw computed
+Product Mass = actual_mass x purity = 0.2108 x 0.47 = 0.09908, not
+actual_mass unchanged. Setting type 18 back to 1 (100%) restored
+actual_mass_display to 0.2108 (211mg) correctly. Meanwhile the genuinely-
+labeled %Yield field (type 21, read-only, right after actual_moles) stayed
+stuck at "0.00%" throughout this trial too -- reconfirming, independently,
+this module's existing type 21/15/16 finding that ChemDraw's real yield
+engine never runs on this connector's edit-CDXML-and-reopen write path.
+NOW RENAMED to "purity" below (HIGH confidence -- both the live property
+label AND the cascade behavior agree). PRACTICAL CONSEQUENCE: writing
+anything other than 1 (100%) to "purity" will proportionally scale DOWN
+the reported "Product Mass" (actual_mass_display) away from the real
+isolated mass typed into actual_mass -- see tools/stoichiometry.py's tool
+docstring for the caller-facing warning, and the new
+computed_percent_yield field below for how to actually get a %yield
+number instead.
+
+This also means type 18's *position* (right after Equivalents, shaped like
+a %Yield input) was a misleading guide to its real identity -- so type 22
+("product_percent_weight" below), named the same position/shape-only way
+by analogy to reactant's type 8 ("percent_weight"), is NOT upgraded by
+this finding; it stays LOW-MEDIUM confidence, unverified by any live
+cascade of its own. Its naming is at least self-consistent with type 8's
+precedent (both "%Weight" mass-fraction-of-mixture fields, a different
+concept from Purity/type 18 or the real %Yield/type 21) -- but that is a
+naming-consistency argument, not live proof, and should be read with the
+same caution as before.
+
+CLIENT-SIDE COMPUTED FIELDS (added 2026-07-23, NOT ChemDraw-native --
+never sent to/read from ChemDraw itself): since ChemDraw's own theoretical-
+mass/%yield engine (types 15/16/21) is confirmed dead on this write path
+(see above, twice over), compute_derived_yield_fields() below derives a
+real theoretical_mass and %yield in pure Python from fields that DO
+reliably round-trip: theoretical_mass = the limiting reagent's own
+reactant_moles (type 13) x the product's own molecular_weight (type 2);
+percent_yield = the product's actual_mass (type 17) / that
+theoretical_mass. See that function's docstring for its bail-out
+conditions (multiple/zero limiting reagents, missing MW, etc.) -- it never
+raises and never guesses past what the data actually supports.
 """
 import re
 import xml.etree.ElementTree as ET
 
 SG_PROPERTY_FIELDS = {
-    1: "formula",            # HIGH -- matches the structure's own formula text
-    2: "molecular_weight",   # HIGH -- matches "46.07" / "78.11"
-    4: "limiting_reagent",   # HIGH -- matches "Yes" / "No"
-    5: "limit_moles",        # HIGH -- the header/row-label component's own text for this row reads "Limit Moles"
-    6: "equivalents",        # HIGH -- confirmed live: visible+populated ("1.06") for a non-limiting reagent
-    7: "sample_mass",        # HIGH -- the field actually live-edited; confirmed to cascade correctly
-    8: "percent_weight",     # MEDIUM -- hidden "100.00%" default, inferred from "%" suffix
-    9: "volume",             # MEDIUM -- hidden "0.00 mL" default, inferred from "mL" suffix
-    10: "molarity",          # MEDIUM -- hidden "0.00 M" default, inferred from "M" suffix
-    12: "density",           # MEDIUM -- hidden "0.00 g/mL" default, inferred from "g/mL" suffix
-    13: "reactant_moles",    # HIGH -- matches visible "108.53mmol" / "217.07mmol"
-    14: "reactant_mass",     # HIGH -- matches visible "5.00g" / "10.00g"
+    1: "formula",              # HIGH -- matches the structure's own formula text
+    2: "molecular_weight",     # HIGH -- matches "46.07" / "78.11"
+    4: "limiting_reagent",     # HIGH -- matches "Yes" / "No" (reactant-only; absent on product components)
+    5: "limit_moles",          # HIGH name, but see module docstring -- never observed to actually populate via this connector's write path
+    6: "equivalents",          # HIGH -- confirmed live: visible+populated ("1.06") for a non-limiting reagent; the one field genuinely shared by both reactant and product components
+    7: "sample_mass",          # HIGH -- the field actually live-edited; confirmed to cascade correctly (reactant-only)
+    8: "percent_weight",       # MEDIUM -- hidden "100.00%" default, inferred from "%" suffix (reactant-only)
+    9: "volume",               # MEDIUM -- hidden "0.00 mL" default, inferred from "mL" suffix (reactant-only)
+    10: "molarity",            # MEDIUM -- hidden "0.00 M" default, inferred from "M" suffix (reactant-only)
+    12: "density",             # MEDIUM -- hidden "0.00 g/mL" default, inferred from "g/mL" suffix (reactant-only)
+    13: "reactant_moles",      # HIGH -- matches visible "108.53mmol" / "217.07mmol" (reactant-only)
+    14: "reactant_mass",       # HIGH -- matches visible "5.00g" / "10.00g" (reactant-only)
+    # Product-side fields (component has no ComponentIsReactant attribute
+    # at all). See module docstring's 2026-07-23 investigation for the
+    # live evidence and confidence behind each of these.
+    15: "theoretical_mass",    # LOW -- plausible role, never observed to populate (product-only)
+    16: "theoretical_moles",   # LOW -- plausible role, never observed to populate (product-only)
+    17: "actual_mass",         # HIGH -- the field actually live-edited; value read back unchanged, exactly as typed (product-only)
+    18: "purity",              # HIGH -- RENAMED 2026-07-23 from "percent_yield": confirmed live to be ChemDraw's own "Purity" field (its property text reads back literally "Purity"), and confirmed by cascade to be a multiplier against actual_mass feeding actual_mass_display/"Product Mass" (0.2108 actual_mass x 0.47 purity -> 0.099076 actual_mass_display). NOT a yield input -- see module docstring's 2026-07-23-part-2 finding and tools/stoichiometry.py's tool docstring for the write-path warning. (product-only)
+    19: "actual_mass_display", # HIGH that it mirrors 17 exactly (confirmed live, twice) UNLESS purity (type 18) is set away from 1 (100%), in which case it's actual_mass * purity (confirmed live, see type 18's note); MEDIUM on why a separate read-only copy exists at all (product-only)
+    20: "actual_moles",        # HIGH -- confirmed live: exactly actual_mass / molecular_weight (product-only)
+    22: "product_percent_weight",  # LOW-MEDIUM -- editable "%" field defaulting to 100%, same shape as reactant's percent_weight (type 8); naming is self-consistent with that precedent but NOT independently cascade-verified -- type 18's 2026-07-23 correction shows position/shape alone is not reliable evidence for this property range, so this one is deliberately NOT upgraded by that finding (product-only)
 }
 _FIELD_TO_TYPE = {v: k for k, v in SG_PROPERTY_FIELDS.items()}
 
@@ -92,7 +204,11 @@ _FIELD_TO_TYPE = {v: k for k, v in SG_PROPERTY_FIELDS.items()}
 # ignore. Only the ones actually exercised live are flagged; anything not
 # listed here is *assumed* editable, since IsReadOnly on the sgdatum itself
 # (checked in apply_edit) is the real, authoritative guard.
-COMPUTED_FIELDS = frozenset({"formula", "molecular_weight"})
+COMPUTED_FIELDS = frozenset({
+    "formula", "molecular_weight",
+    "theoretical_mass", "theoretical_moles",
+    "actual_mass_display", "actual_moles",
+})
 
 
 def field_to_property_type(field):
@@ -165,6 +281,118 @@ def parse_grids(cdxml_text):
             "components": components,
         })
     return grids
+
+
+def _float_or_none(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def compute_derived_yield_fields(grid):
+    """CONNECTOR-COMPUTED (NOT a ChemDraw-native value -- never read from or
+    written back to ChemDraw itself), real theoretical_mass/%yield for
+    every PRODUCT component in one grid (a dict from parse_grids'
+    "components" list, i.e. one "grid" entry from parse_grids(...)'s
+    return value).
+
+    Exists because ChemDraw's own theoretical-mass/%yield fields (types
+    15/16/21) are confirmed dead on this connector's edit-CDXML-and-reopen
+    write path -- see this module's docstring -- so a caller who trusts
+    them silently gets "0" forever. This computes the same chemistry in
+    pure Python instead, from fields that DO reliably round-trip:
+
+        computed_theoretical_mass = limiting_reagent.reactant_moles (type 13)
+                                     * product.molecular_weight (type 2)
+        computed_percent_yield    = product.actual_mass (type 17)
+                                     / computed_theoretical_mass
+
+    Operates on ONE grid only and never looks at any other grid -- a
+    document with multiple stoichiometry grids gets one independent
+    computation per grid, never cross-referencing reactants from a
+    different grid into a different grid's product.
+
+    Returns {component_index: {"computed_theoretical_mass": float | None,
+    "computed_percent_yield": float | None, "reason": str | None}}, one
+    entry per product component (is_header False, is_reactant False) in
+    the grid. Never raises. Both values are None with "reason" explaining
+    why whenever the single-limiting-reagent assumption this needs doesn't
+    hold for the grid as a whole (zero or more than one reactant component
+    flagged limiting_reagent=="Yes", or the limiting reagent has no
+    parseable reactant_moles), or per-product whenever that product itself
+    has no parseable molecular_weight or actual_mass. A grid with no
+    product components at all returns {}.
+    """
+    reactant_comps = [c for c in grid["components"]
+                       if not c["is_header"] and c["is_reactant"]]
+    product_comps = [c for c in grid["components"]
+                      if not c["is_header"] and not c["is_reactant"]]
+    if not product_comps:
+        return {}
+
+    def _bail(reason):
+        return {p["component_index"]: {
+            "computed_theoretical_mass": None,
+            "computed_percent_yield": None,
+            "reason": reason,
+        } for p in product_comps}
+
+    limiting = [c for c in reactant_comps
+                if c["properties"].get(4, {}).get("value") == "Yes"]
+    if len(limiting) != 1:
+        if not limiting:
+            reason = ("no reactant component is flagged limiting_reagent "
+                       "(SGPropertyType 4 == 'Yes')")
+        else:
+            reason = (f"{len(limiting)} reactant components are flagged "
+                      "limiting_reagent -- expected exactly 1")
+        return _bail(reason)
+
+    limiting_moles = _float_or_none(
+        limiting[0]["properties"].get(13, {}).get("value"))
+    if limiting_moles is None:
+        return _bail(
+            "limiting reagent has no parseable reactant_moles "
+            "(SGPropertyType 13)"
+        )
+
+    out = {}
+    for p in product_comps:
+        mw = _float_or_none(p["properties"].get(2, {}).get("value"))
+        if mw is None:
+            out[p["component_index"]] = {
+                "computed_theoretical_mass": None,
+                "computed_percent_yield": None,
+                "reason": ("product has no parseable molecular_weight "
+                           "(SGPropertyType 2)"),
+            }
+            continue
+        theoretical_mass = limiting_moles * mw
+        actual_mass = _float_or_none(p["properties"].get(17, {}).get("value"))
+        if actual_mass is None:
+            out[p["component_index"]] = {
+                "computed_theoretical_mass": theoretical_mass,
+                "computed_percent_yield": None,
+                "reason": ("product has no parseable actual_mass "
+                           "(SGPropertyType 17)"),
+            }
+            continue
+        if theoretical_mass == 0:
+            out[p["component_index"]] = {
+                "computed_theoretical_mass": theoretical_mass,
+                "computed_percent_yield": None,
+                "reason": "computed_theoretical_mass is 0 -- can't divide",
+            }
+            continue
+        out[p["component_index"]] = {
+            "computed_theoretical_mass": theoretical_mass,
+            "computed_percent_yield": actual_mass / theoretical_mass,
+            "reason": None,
+        }
+    return out
 
 
 _TAG_RE = re.compile(r'<(/?)(stoichiometrygrid|sgcomponent|sgdatum)\b')

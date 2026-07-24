@@ -57,17 +57,17 @@ def _write_base_name(doc_name):
 
 
 class _Stoichiometry:
-    def make_stoichiometry_table(self, structure_ids):
+    def make_stoichiometry_table(self, reactant_ids, product_ids):
         """Build a native Stoichiometry Grid from EXISTING structures
-        already on the canvas (structure_ids from chemdraw_insert_structure
-        or chemdraw_get_document_state -- at least 2 required).
+        already on the canvas (ids from chemdraw_insert_structure or
+        chemdraw_get_document_state -- at least 1 reactant and 1 product
+        required).
 
         CONFIRMED LIVE: MakeStoichiometryGrid() needs an Arrow present in
         the selection alongside the structure Groups -- calling it with
         only plain Groups selected (no arrow) throws a hard COM exception
         ("The server threw an exception"), not a silent no-op or a usable
-        empty grid. So this always draws one simple arrow spanning the
-        selected structures' combined bounding box first -- a real,
+        empty grid. So this always draws one simple arrow -- a real,
         chemically normal part of a reaction/stoichiometry figure, not a
         cosmetic throwaway. It's left in place rather than deleted:
         Arrow.Delete() has never been exercised or verified safe anywhere
@@ -76,50 +76,100 @@ class _Stoichiometry:
         never trust an unverified COM mutation, so an untested Delete()
         call isn't worth the risk for a purely cosmetic cleanup.
 
+        FIXED 2026-07-23 (was a real bug, not just a naming gap): every
+        component used to come back with ComponentIsReactant="yes",
+        including products, because the arrow this method drew sat BELOW
+        the combined bounding box of every given structure, spanning its
+        full left-to-right extent -- every structure sat entirely on one
+        side (above) of that arrow, so ChemDraw's own MakeStoichiometryGrid
+        had no "before this arrow" vs "after this arrow" split to key its
+        reactant/product classification on and defaulted everything to
+        reactant. Live-probed fix (see docs/com_typelib or ask for the
+        probe scripts): draw the arrow the same way
+        chemdraw_make_reaction_scheme does -- horizontally BETWEEN the
+        reactant cluster (tail/End, left) and the product cluster
+        (head/Start, right) -- and a genuine product component comes back
+        with NO ComponentIsReactant attribute at all (not "no" -- simply
+        absent), which parse_grids's `== "yes"` check already treats as
+        False correctly. This also means every product-side field lives
+        under a DIFFERENT SGPropertyType numbering than reactant fields
+        (see domain/stoichiometry_cdxml.py's module docstring for the
+        newly-mapped 15-22 range) -- there was no way to reach or discover
+        that surface at all while every structure was misclassified as a
+        reactant.
+
+        Requires reactant_ids' structures to already sit to the left of
+        product_ids' on the canvas (the natural chemdraw_make_reaction_
+        scheme layout already satisfies this) -- ChemDraw infers each
+        component's role from which side of the arrow it's on, not from
+        which Python list its id came from, so this call still needs that
+        spatial split to be real, not just logical.
+
         Returns the new grid's grid_index (for chemdraw_edit_stoichiometry_
         table) plus the arrow's object_id."""
         def go():
-            if len(structure_ids) < 2:
+            if len(reactant_ids) < 1:
                 raise InvalidInputError(
-                    "Need at least 2 structure_ids to build a "
-                    "stoichiometry table (got "
-                    f"{len(structure_ids)})."
+                    "Need at least 1 reactant_ids to build a stoichiometry "
+                    f"table (got {len(reactant_ids)})."
+                )
+            if len(product_ids) < 1:
+                raise InvalidInputError(
+                    "Need at least 1 product_ids to build a stoichiometry "
+                    f"table (got {len(product_ids)})."
                 )
             doc = self._doc()
             cache = self._cache_for(doc)
-            units = [targets.find_by_id(doc, sid, cache)
-                    for sid in structure_ids]
+            reactant_units = [targets.find_by_id(doc, sid, cache)
+                              for sid in reactant_ids]
+            product_units = [targets.find_by_id(doc, sid, cache)
+                             for sid in product_ids]
+            all_units = reactant_units + product_units
             backup = self._maybe_snapshot(doc)
 
-            for u in units:
+            for u in all_units:
                 u.Selected = True
-            left = min(u.Left for u in units)
-            right = max(u.Right for u in units)
-            # Below the reactants' own combined footprint, not through
-            # their shared vertical center -- confirmed live the old
-            # cy = (min(Top)+max(Bottom))/2 placement drew the arrow
-            # straight through both structures' own drawings (their
-            # center IS inside their bounding boxes), not in a clean gap
-            # below them. 20pt margin matches this codebase's other
-            # inter-element gaps (e.g. layout_math.caption_anchor's
-            # default 12pt, arrange_grid's v_gap default 8pt -- a bit
-            # more breathing room here since a whole structure sits right
-            # above, not just a caption).
-            y = max(u.Bottom for u in units) + 20.0
+
+            reactant_right = max(u.Right for u in reactant_units)
+            product_left = min(u.Left for u in product_units)
+            try:
+                arrow_left_x, arrow_right_x = layout_math.stoichiometry_arrow_span(
+                    reactant_right, product_left)
+            except ValueError:
+                raise InvalidInputError(
+                    "chemdraw_make_stoichiometry_table needs every product "
+                    "positioned to the right of every reactant on the "
+                    f"canvas (rightmost reactant edge={reactant_right:.1f}, "
+                    f"leftmost product edge={product_left:.1f}) -- "
+                    "ChemDraw's own MakeStoichiometryGrid infers each "
+                    "structure's reactant/product role in the table from "
+                    "which side of the selected arrow it sits on, not from "
+                    "this call's reactant_ids/product_ids split alone. "
+                    "Reposition the structures first (e.g. "
+                    "chemdraw_move_objects), or build the scheme with "
+                    "chemdraw_make_reaction_scheme, which already lays "
+                    "them out this way."
+                ) from None
+            # Shared vertical center across every given structure -- fine
+            # for a normal single-row scheme (what chemdraw_make_reaction_
+            # scheme itself produces); a caller with reactants/products
+            # scattered across very different heights should reposition
+            # them into one row first, same expectation _reaction.py's own
+            # layout already assumes.
+            y = (min(u.Top for u in all_units)
+                 + max(u.Bottom for u in all_units)) / 2.0
+
             arrow = doc.MakeArrow()
             # Start carries the arrowhead by default (confirmed live
             # elsewhere in this codebase -- see bridge._reaction's own
-            # arrow construction) -- putting the RIGHT point at Start
-            # points the arrow rightward, the same reading-direction
-            # convention chemdraw_make_reaction_scheme's own arrow uses,
-            # not backwards away from the reactants (confirmed live: the
-            # old left-point-at-Start setup pointed the arrowhead away
-            # from the reaction, back past the leftmost reactant).
+            # arrow construction) -- head on the product side (right),
+            # tail on the reactant side (left), the same reading-direction
+            # convention chemdraw_make_reaction_scheme's own arrow uses.
             sp = arrow.Start
-            sp.X, sp.Y = right, y
+            sp.X, sp.Y = arrow_right_x, y
             arrow.Start = sp
             ep = arrow.End
-            ep.X, ep.Y = left, y
+            ep.X, ep.Y = arrow_left_x, y
             arrow.End = ep
             arrow.Selected = True
 
@@ -151,9 +201,9 @@ class _Stoichiometry:
             # so only the arrow and the reactant/product structures
             # themselves are checked.
             arrow_id = targets.ensure_id(arrow)
-            off_page_boxes = [layout_math.Box(left, y - 1.0, right, y + 1.0)]
+            off_page_boxes = [layout_math.Box(arrow_left_x, y - 1.0, arrow_right_x, y + 1.0)]
             off_page_ids = [arrow_id]
-            for u in units:
+            for u in all_units:
                 off_page_boxes.append(layout_math.Box(u.Left, u.Top, u.Right, u.Bottom))
                 off_page_ids.append(targets.ensure_id(u))
             off_page = layout_math.page_overflow(
@@ -171,7 +221,7 @@ class _Stoichiometry:
                     "Call chemdraw_read_stoichiometry_table to see the "
                     "new grid's fields, then chemdraw_edit_stoichiometry_"
                     "table with this grid_index to fill in reactant "
-                    "quantities."
+                    "quantities and product yield."
                 ),
             }
         return self._run(go, timeout=SLOW_TIMEOUT)
@@ -194,7 +244,25 @@ class _Stoichiometry:
         CDXML text (the only working access path). Each component is
         annotated with this connector's claude_id (structure_id) where its
         raw ComponentReferenceID matches an addressable structure -- None
-        for the row-label header component, which is always read-only."""
+        for the row-label header component, which is always read-only.
+
+        Every product component's properties also carry two CONNECTOR-
+        COMPUTED fields, "computed_theoretical_mass" and
+        "computed_percent_yield" -- NOT ChemDraw-native values, never
+        written to or read from ChemDraw itself (marked
+        "connector_computed": true, value always null on the "editable"
+        axis since there's nothing in ChemDraw to write back to). These
+        exist because ChemDraw's own theoretical_mass/theoretical_moles/
+        %Yield (types 15/16/21) never populate via this connector's write
+        path (see domain/stoichiometry_cdxml.py's module docstring) --
+        real chemistry computed client-side instead, from the limiting
+        reagent's reactant_moles and the product's own molecular_weight/
+        actual_mass. When the single-limiting-reagent assumption this
+        needs doesn't hold (zero/multiple limiting reagents, missing MW,
+        etc.), both values come back null with a "reason" string instead
+        of a guess -- see
+        domain.stoichiometry_cdxml.compute_derived_yield_fields for the
+        exact bail-out conditions."""
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)
@@ -205,24 +273,39 @@ class _Stoichiometry:
             grids = sc.parse_grids(text)
             out_grids = []
             for grid in grids:
+                derived = sc.compute_derived_yield_fields(grid)
                 out_components = []
                 for comp in grid["components"]:
                     ref = comp["structure_ref_id"]
+                    properties = {
+                        v["field"]: {
+                            "property_type": k,
+                            "value": v["value"],
+                            "text": v["text"],
+                            "editable": v["editable"],
+                            "visible": v["visible"],
+                        }
+                        for k, v in comp["properties"].items()
+                    }
+                    comp_derived = derived.get(comp["component_index"])
+                    if comp_derived is not None:
+                        for derived_field in ("computed_theoretical_mass",
+                                              "computed_percent_yield"):
+                            properties[derived_field] = {
+                                "property_type": None,
+                                "value": comp_derived[derived_field],
+                                "text": None,
+                                "editable": False,
+                                "visible": True,
+                                "connector_computed": True,
+                                "reason": comp_derived["reason"],
+                            }
                     out_components.append({
                         "component_index": comp["component_index"],
                         "structure_id": id_map.get(ref) if ref else None,
                         "is_header": comp["is_header"],
                         "is_reactant": comp["is_reactant"],
-                        "properties": {
-                            v["field"]: {
-                                "property_type": k,
-                                "value": v["value"],
-                                "text": v["text"],
-                                "editable": v["editable"],
-                                "visible": v["visible"],
-                            }
-                            for k, v in comp["properties"].items()
-                        },
+                        "properties": properties,
                     })
                 out_grids.append({
                     "grid_index": grid["grid_index"],

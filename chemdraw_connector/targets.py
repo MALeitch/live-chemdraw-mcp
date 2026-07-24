@@ -564,24 +564,61 @@ def find_annotation_by_id(doc, kind, object_id):
     raise TargetNotFoundError(object_id)
 
 
-def find_removable_by_id(doc, object_id, cache=None):
-    """Find ANY addressable object by id for deletion purposes — a
-    structure unit first (the common case), then every annotation kind
-    (caption, arrow, symbol, bracket, tlc_plate) in turn.
+def find_annotation_by_id_any(doc, object_id):
+    """The annotation-only half of find_removable_by_id's fallback,
+    factored out so a caller that has already resolved structures itself
+    via its own cached iter_units scan (move_objects' per-move loop,
+    resolve_any below) can fall through to just this part on a miss,
+    instead of paying for a redundant find_by_id (full structure) attempt
+    on every single lookup. Same contract as find_annotation_by_id, just
+    not scoped to one kind — tries every kind in ANNOTATION_COLLECTIONS in
+    turn and returns (kind, obj) for whichever matches."""
+    if not object_id:
+        raise TargetNotFoundError(object_id)
+    for kind in ANNOTATION_COLLECTIONS:
+        try:
+            return kind, find_annotation_by_id(doc, kind, object_id)
+        except TargetNotFoundError:
+            continue
+    raise TargetNotFoundError(object_id)
 
-    Exists because a caption or a bad TLC plate/bracket/arrow used to be
-    completely unrecoverable once created: chemdraw_remove's target
-    resolution (targets.resolve/find_by_id) only ever searched
-    iter_units — real chemical structures — so an orphaned caption (e.g.
-    left behind after its owning structure was deleted, or a caption
-    that got put in the wrong place) or a mis-built annotation had no id
-    space it could be addressed through at all, and neither
-    chemdraw_remove nor chemdraw_undo (which doesn't cover this
-    connector's own mutations anyway — see bridge.undo) could reach it.
-    Every one of these object kinds is confirmed live to expose a plain
-    .Delete() method (Caption, Arrow, TLCPlate all confirmed directly;
-    Symbol/Bracket share the same base object interface) — see
-    bridge._Manipulation.remove for how this return value is used.
+
+def find_removable_by_id(doc, object_id, cache=None):
+    """Find ANY addressable object by id — a structure unit first (the
+    common case), then every annotation kind (caption, arrow, symbol,
+    bracket, tlc_plate) in turn, via find_annotation_by_id_any.
+
+    Originally built for deletion (chemdraw_remove): a caption or a bad
+    TLC plate/bracket/arrow used to be completely unrecoverable once
+    created, because chemdraw_remove's target resolution (targets.resolve/
+    find_by_id) only ever searched iter_units — real chemical structures —
+    so an orphaned caption (e.g. left behind after its owning structure
+    was deleted, or a caption that got put in the wrong place) or a
+    mis-built annotation had no id space it could be addressed through at
+    all, and neither chemdraw_remove nor chemdraw_undo (which doesn't
+    cover this connector's own mutations anyway — see bridge.undo) could
+    reach it. Every one of these object kinds is confirmed live to expose
+    a plain .Delete() method (Caption, Arrow, TLCPlate all confirmed
+    directly; Symbol/Bracket share the same base object interface) — see
+    bridge._Manipulation.remove for how this return value is used there.
+
+    Also now the shared lookup behind resolve_any (move_objects/
+    transform's target resolution) — an arrow or a free-floating/unowned
+    caption used to be reachable for deletion through this function but
+    NOT for move_objects/transform, which resolved purely through
+    iter_units/find_by_id/resolve (structures only) with no annotation
+    fallback at all. That gap is what made an id that
+    chemdraw_list_arrows/chemdraw_get_document_state had just confirmed
+    exists come back from chemdraw_move_objects under "missing", and from
+    chemdraw_transform as a TargetNotFoundError claiming the object "no
+    longer exists ... may have been deleted or modified by hand" — which
+    was actively misleading, since the very same id resolved fine one call
+    earlier and nothing had touched the document in between. Routing
+    move_objects/transform through this same function (via resolve_any)
+    means that specific misleading message now only fires when an id
+    genuinely resolves nowhere — structure or any annotation kind — not
+    merely because the caller's resolution path didn't know annotations
+    existed.
 
     Returns (kind, obj) where kind is "structure" or one of
     ANNOTATION_COLLECTIONS' keys. Raises TargetNotFoundError if nothing
@@ -590,12 +627,7 @@ def find_removable_by_id(doc, object_id, cache=None):
         return "structure", find_by_id(doc, object_id, cache)
     except TargetNotFoundError:
         pass
-    for kind in ANNOTATION_COLLECTIONS:
-        try:
-            return kind, find_annotation_by_id(doc, kind, object_id)
-        except TargetNotFoundError:
-            continue
-    raise TargetNotFoundError(object_id)
+    return find_annotation_by_id_any(doc, object_id)
 
 
 def resolve(doc, target, cache=None):
@@ -633,4 +665,32 @@ def resolve(doc, target, cache=None):
         return [find_by_id(doc, target, cache)]
     if isinstance(target, (list, tuple)):
         return [find_by_id(doc, oid, cache) for oid in target]
+    raise ValueError(f"Unintelligible target: {target!r}")
+
+
+def resolve_any(doc, target, cache=None):
+    """Same target spec as resolve() ("selection" | "document" | object_id
+    | list of object_ids) but able to resolve to annotations too, not just
+    structure units — the target-resolution half of the move_objects/
+    transform fix (see find_removable_by_id's docstring for the bug this
+    closes).
+
+    "selection"/"document" behave exactly as resolve() does and return
+    structures only: annotations were never part of either (see
+    iter_annotations' docstring — several existing callers, e.g.
+    describe_canvas, assume target="document"/"selection" resolution is
+    structures-only and must keep seeing exactly that). Only an explicit
+    id or list of ids can resolve to an annotation, via
+    find_removable_by_id's structure-then-every-annotation-kind fallback.
+
+    Returns a list of (kind, obj) pairs — kind is "structure" or one of
+    ANNOTATION_COLLECTIONS' keys — so a caller that needs different
+    move/bounds-reading logic per kind (move_objects, transform) knows
+    which applies to each resolved object without a second lookup."""
+    if target == "document" or target == "selection":
+        return [("structure", u) for u in resolve(doc, target, cache)]
+    if isinstance(target, str):
+        return [find_removable_by_id(doc, target, cache)]
+    if isinstance(target, (list, tuple)):
+        return [find_removable_by_id(doc, oid, cache) for oid in target]
     raise ValueError(f"Unintelligible target: {target!r}")

@@ -3,7 +3,7 @@
 from .. import state, targets
 from ..com import types as t
 from ..domain import bond_split, diff
-from ..errors import InvalidInputError
+from ..errors import InvalidInputError, TargetNotFoundError
 from ._plumbing import SLOW_TIMEOUT
 
 # edit_atoms/edit_bonds scale their timeout with batch size (max(SLOW_TIMEOUT,
@@ -117,12 +117,52 @@ class _Manipulation:
     def transform(self, target="selection", action="clean", dx=0.0, dy=0.0,
                   degrees=0.0, factor=1.0, vertical=False,
                   atom_refs=None, bond_refs=None):
+        """target may also be (or include) an arrow, symbol, bracket,
+        tlc_plate, or (owned or unowned) caption id, not just a structure's
+        — resolved via targets.resolve_any/find_removable_by_id (see that
+        function's docstring for the "no longer exists" misdirection this
+        replaces: the very same id chemdraw_list_arrows/
+        chemdraw_get_document_state had just confirmed exists used to come
+        back from here as TargetNotFoundError, wrongly implying it had
+        been deleted). Only action="move" is meaningful for an annotation
+        — ChemDraw's rotate/scale/flip/clean operate on chemical
+        structure, which arrows/captions/etc. don't have — so any other
+        action against an annotation target is reported per-item in
+        `failed` with a clear reason instead of silently no-oping or
+        raising a generic error. atom_refs/bond_refs (sub-selection) stay
+        structure-only: an annotation has no atoms/bonds to select, so
+        that combination is rejected with an explicit InvalidInputError
+        naming which kind was actually resolved, rather than falling
+        through to resolve()'s "no longer exists" for a target that in
+        fact does exist, just not as a structure."""
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)
 
             if atom_refs or bond_refs:
-                units = targets.resolve(doc, target, cache)
+                try:
+                    units = targets.resolve(doc, target, cache)
+                except TargetNotFoundError:
+                    # target may be a genuine annotation id (arrow,
+                    # caption, ...) rather than something that no longer
+                    # exists at all -- resolve() only ever searches
+                    # structures, so it can't tell the two apart itself.
+                    # Give the accurate reason when that's the case,
+                    # instead of letting the misleading "no longer exists"
+                    # message stand for an id that plainly does exist.
+                    if isinstance(target, str):
+                        try:
+                            kind, _ = targets.find_annotation_by_id_any(doc, target)
+                        except TargetNotFoundError:
+                            raise
+                        raise InvalidInputError(
+                            f"atom_refs/bond_refs need a structure target, "
+                            f"but {target!r} resolved to a {kind}, which "
+                            "has no atoms or bonds to select. Use target="
+                            f"{target!r} with action='move' and no "
+                            "atom_refs/bond_refs to move it as a whole."
+                        )
+                    raise
                 if len(units) != 1:
                     raise InvalidInputError(
                         f"atom_refs/bond_refs need exactly one target "
@@ -174,13 +214,45 @@ class _Manipulation:
                     "backup_path": backup,
                 }
 
-            units = targets.resolve(doc, target, cache)
+            resolved = targets.resolve_any(doc, target, cache)
             transformed, failed = [], []
-            for u in units:
-                uid = targets.ensure_id(u)
+            for kind, obj in resolved:
+                uid = targets.ensure_id(obj)
+                if kind != "structure":
+                    # Arrow/caption/symbol/bracket/tlc_plate -- only a
+                    # whole-object move is supported (no Rotate/Scale/
+                    # Flip/Clean equivalent through this connector; see
+                    # this method's own docstring). Reported per-item,
+                    # same isolation as a structure's Clean()/Rotate()
+                    # failing below, so one unsupported action in a mixed
+                    # batch doesn't discard whatever else transformed.
+                    if action != "move":
+                        failed.append({
+                            "id": uid,
+                            "error": (
+                                f"action={action!r} is not supported for a "
+                                f"{kind} -- ChemDraw's rotate/scale/flip/"
+                                "clean apply to chemical structure, which "
+                                f"a {kind} doesn't have. Only action='move' "
+                                f"is supported for a {kind} target."
+                            ),
+                        })
+                        continue
+                    if self._move_annotation(kind, obj, dx, dy):
+                        transformed.append(uid)
+                    else:
+                        failed.append({
+                            "id": uid,
+                            "error": (
+                                f"Could not move {kind} {uid!r} -- its "
+                                "positional properties could not be read "
+                                "or written."
+                            ),
+                        })
+                    continue
                 try:
                     self._apply_transform_action(
-                        targets.unit_objects(u), action, dx, dy, degrees,
+                        targets.unit_objects(obj), action, dx, dy, degrees,
                         factor, vertical)
                     transformed.append(uid)
                 except Exception as exc:

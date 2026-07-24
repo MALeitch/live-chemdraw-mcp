@@ -187,7 +187,16 @@ def register(mcp, bridge):
         "part of a structure can distort bond length/angle at the "
         "connection point to the untouched part — follow up with "
         "chemdraw_transform(..., action='clean') on the whole structure "
-        "afterward to fix that. " + TARGET_DOC))
+        "afterward to fix that. target may also be (or, as a list, "
+        "include) a free-floating annotation id — an arrow, symbol, "
+        "bracket, tlc_plate, or caption including an unowned one (e.g. a "
+        "reaction scheme's reagents_text/conditions_text) — instead of a "
+        "structure's; only action='move' is supported for those (they have "
+        "no chemical structure for rotate/scale/flip/clean to act on), and "
+        "an unsupported action against one is reported per-item in "
+        "`failed` rather than raised. atom_refs/bond_refs cannot target an "
+        "annotation (it has no atoms/bonds); doing so raises a clear error "
+        "naming what target actually resolved to. " + TARGET_DOC))
     def chemdraw_transform(target: str = "selection", action: str = "clean",
                            dx: float = 0, dy: float = 0, degrees: float = 0,
                            factor: float = 1.0, vertical: bool = False,
