@@ -21,7 +21,17 @@ _ORDER_MAP = {"1": 1, "2": 2, "3": 3, "4": 4, "0.5": 1, "1.5": 15, "2.5": 2}
 
 
 def parse(cdxml_text):
-    """Parse CDXML into {"nodes": [...], "bonds": [...]}.
+    """Parse CDXML text into {"nodes": [...], "bonds": [...]}. See
+    parse_element for the actual walk -- this just parses text first."""
+    return parse_element(ET.fromstring(cdxml_text))
+
+
+def parse_element(elem):
+    """Same as parse(), but starting from an already-parsed ElementTree
+    Element instead of raw text -- lets a caller run this on just ONE
+    <fragment>/<group> subtree of a larger already-parsed document (e.g.
+    domain/cdxml_document.py, which parses a whole page's worth of
+    structures without re-serializing each one back to a string first).
 
     nodes: {"id", "element", "charge", "is_real_atom", "node_type"}
     bonds: {"begin", "end", "order"}  (order 15 == aromatic-drawn "1.5")
@@ -29,9 +39,8 @@ def parse(cdxml_text):
     Only top-level nodes are collected: the inner <fragment> of a contracted
     nickname node is intentionally skipped, so a nickname is one dummy vertex.
     """
-    root = ET.fromstring(cdxml_text)
     nodes, bonds = [], []
-    _collect(root, nodes, bonds)
+    _collect(elem, nodes, bonds)
     known = {n["id"] for n in nodes}
     # A bond may reference an id we skipped (shouldn't happen at top level,
     # but a malformed page must not crash matching).

@@ -1,3 +1,5 @@
+import xml.etree.ElementTree as ET
+
 from chemdraw_connector.domain import cdxml_graph
 
 # Trimmed from a live ChemDraw 26 export: ethyl + contracted "Ph" nickname.
@@ -62,3 +64,15 @@ def test_bond_to_missing_node_dropped_not_crash():
       <b B="1" E="2"/><b B="1" E="99"/>
     </fragment></page></CDXML>""")
     assert len(graph["bonds"]) == 1
+
+
+def test_parse_element_matches_parse_on_same_content():
+    # ROADMAP #7 (domain/cdxml_document.py) calls parse_element directly
+    # on an already-parsed <fragment>/<group> Element (one of several
+    # structures on a page it parsed itself), not on raw text -- confirms
+    # the refactor is behavior-preserving.
+    root = ET.fromstring(CDXML_WITH_NICKNAME)
+    fragment = root.find(".//fragment")
+    from_element = cdxml_graph.parse_element(fragment)
+    from_text = cdxml_graph.parse(CDXML_WITH_NICKNAME)
+    assert from_element == from_text
