@@ -104,7 +104,20 @@ class _Stoichiometry:
         scheme layout already satisfies this) -- ChemDraw infers each
         component's role from which side of the arrow it's on, not from
         which Python list its id came from, so this call still needs that
-        spatial split to be real, not just logical.
+        spatial split to be real, not just logical. IMPORTANT: this
+        requirement also means every given structure must sit in ONE ROW
+        -- the arrow drawn here is a single horizontal span/one shared
+        vertical center across every reactant/product given, regardless
+        of which row each one is actually in, so a caller whose structures
+        are scattered across 2+ rows (e.g. a 2-step scheme) can get
+        components silently dropped or flipped to the wrong side by
+        ChemDraw's own MakeStoichiometryGrid, with NO error from ChemDraw
+        itself. Also now checked (not just documented): each parsed
+        component's structure_ref_id is cross-referenced against
+        reactant_ids/product_ids (see domain.stoichiometry_cdxml.
+        diagnose_component_mismatch) and any mismatch is reported under
+        violations.component_mismatch instead of silently trusted (added
+        2026-07-24).
 
         Returns the new grid's grid_index (for chemdraw_edit_stoichiometry_
         table) plus the arrow's object_id."""
@@ -186,11 +199,40 @@ class _Stoichiometry:
 
             text = snapshots.export_cdxml_text(doc)
             grid_index = None
+            matched_grid = None
             if text is not None:
                 for g in sc.parse_grids(text):
                     if g["grid_id"] == grid_id:
                         grid_index = g["grid_index"]
+                        matched_grid = g
                         break
+
+            # ChemDraw's own MakeStoichiometryGrid infers each component's
+            # reactant/product role from which side of the arrow drawn
+            # above it sits on, not from reactant_ids/product_ids at all
+            # (see this method's own docstring) -- a caller whose
+            # structures are scattered across more than one row can get
+            # components silently dropped or flipped to the wrong side,
+            # with NO error from ChemDraw and (until now) no check here
+            # either, even though component_count was already computed
+            # above. Cross-reference the actual grid against what was
+            # asked for and surface any gap instead of returning a
+            # falsely-complete-looking table.
+            # component_count itself (raw grid.Components.Count) includes
+            # 1-2 header/row-label rows whose count varies with whether
+            # both sides ended up with real content -- not precise enough
+            # to compare directly against len(reactant_ids)+len(product_
+            # ids). diagnose_component_mismatch instead counts non-header
+            # components from the parsed grid, which is unambiguous.
+            # matched_grid is only None if the CDXML export/grid_id match
+            # itself failed (a different, rarer failure mode) -- nothing
+            # reliable to cross-reference against in that case, so this
+            # stays None rather than guessing.
+            component_mismatch = None
+            if matched_grid is not None:
+                id_map = self._raw_id_map(doc, cache)
+                component_mismatch = sc.diagnose_component_mismatch(
+                    matched_grid, id_map, reactant_ids, product_ids)
 
             # Every other layout-mutating tool here (arrange_grid,
             # build_scope_table, make_reaction_scheme) reports
@@ -216,7 +258,8 @@ class _Stoichiometry:
                 "grid_id": grid_id,
                 "component_count": component_count,
                 "arrow_object_id": arrow_id,
-                "violations": {"off_page": off_page},
+                "violations": {"off_page": off_page,
+                               "component_mismatch": component_mismatch},
                 "backup_path": backup,
                 "note": (
                     "Call chemdraw_read_stoichiometry_table to see the "

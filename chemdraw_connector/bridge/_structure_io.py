@@ -3,6 +3,7 @@ clipboard out."""
 import base64
 
 from .. import targets
+from ..com import nudge
 from ..com import types as t
 from ..domain import layout_math
 from ..errors import ChemDrawError
@@ -68,9 +69,19 @@ class _StructureIO:
                 )
                 wrapper_groups.append(entry)
 
-            return {"inserted": self._describe_units(doc, units),
-                    "off_page": off_page,
-                    "wrapper_groups": wrapper_groups}
+            result = {"inserted": self._describe_units(doc, units),
+                     "off_page": off_page,
+                     "wrapper_groups": wrapper_groups}
+            # Every OTHER document-mutating call in this codebase settles
+            # ChemDraw's window/focus state afterward (new_document,
+            # use_scratch_document, open_document, set_active_document —
+            # see com/nudge.py's own docstring on why doc.Activate() alone
+            # doesn't update real window focus/state) — this call was the
+            # one exception. Confirmed live: a query immediately after
+            # (chemdraw_get_document_state/chemdraw_status) could observe
+            # stale Groups/Atoms/Bonds counts for one call as a result.
+            nudge.bring_to_foreground(self._conn.hwnd)
+            return result
         return self._run(go, timeout=SLOW_TIMEOUT)
 
     def export_structure(self, fmt="molfile", target="selection"):

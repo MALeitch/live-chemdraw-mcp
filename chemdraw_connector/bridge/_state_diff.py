@@ -15,7 +15,8 @@ class _StateDiff:
             out = canvas.build_canvas(
                 snap, cap_entries, boxes,
                 page_width=float(doc.Width or 540.0),
-                page_height=float(doc.Height or 720.0))
+                page_height=float(doc.Height or 720.0),
+                doc=doc)
             return {
                 "document": doc.name,
                 "structures": out["structures"],

@@ -12,13 +12,23 @@ def register(mcp, bridge):
         reactants: list[str], products: list[str],
         reagents_text: str = "",
         format: str = "smiles",
-        conditions_text: str = ""):
+        conditions_text: str = "",
+        anchor_y: float | None = None):
         """Draw a reaction scheme AND auto-verify it in one call: this is
         chemdraw_make_reaction_scheme immediately followed by
         chemdraw_check_warnings (scoped to just the structures this call
         drew) and chemdraw_find_duplicates (scoped to the whole document)
         — you do NOT need to make either of those calls yourself
         afterward, they are already included in this result.
+
+        Auto-appends below existing content by default: if the canvas
+        already has structures/captions/arrows on it, this scheme is drawn
+        BELOW the lowest existing one rather than always at the same fixed
+        row — calling this tool twice in a row (e.g. to draw a second
+        reaction step) no longer silently draws on top of the first scheme
+        with no warning (confirmed live bug, fixed 2026-07-24). Pass
+        anchor_y explicitly to override auto-append and force a specific
+        row instead.
 
         Standard single-step-scheme convention (ACS style and similar
         journals) — use BOTH text params, not just reagents_text, for any
@@ -77,7 +87,7 @@ def register(mcp, bridge):
         before moving on."""
         result = bridge.make_reaction_scheme(
             reactants, products, reagents_text or None, format,
-            conditions_text or None)
+            conditions_text or None, anchor_y)
 
         object_ids = result.get("object_ids") or []
         result["warnings"] = bridge.check_warnings(object_ids)

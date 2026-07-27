@@ -547,3 +547,67 @@ def test_hidden_property_reports_visible_false():
     )
     grids = sc.parse_grids(text)
     assert grids[0]["components"][1]["properties"][7]["visible"] is False
+
+
+# ---------- diagnose_component_mismatch ----------
+# Guards against the confirmed-live silent-data-loss bug in
+# bridge._Stoichiometry.make_stoichiometry_table: a caller whose
+# reactants/products span more than one row on the canvas can get
+# components silently dropped or flipped to the wrong side by ChemDraw's
+# own MakeStoichiometryGrid, with no error at all. These tests exercise
+# the pure cross-referencing logic in isolation from the CDXML round trip.
+
+def test_diagnose_component_mismatch_none_when_everything_matches():
+    grid = sc.parse_grids(CDXML_WITH_PRODUCT)[0]
+    id_map = {"8": "claude-reactant1", "23": "claude-product1"}
+    result = sc.diagnose_component_mismatch(
+        grid, id_map, ["claude-reactant1"], ["claude-product1"])
+    assert result is None
+
+
+def test_diagnose_component_mismatch_flags_missing_product():
+    # CDXML_ONE_GRID has exactly one reactant component (ref "8") and no
+    # product component at all -- simulates ChemDraw dropping the product
+    # side entirely on a scattered multi-row call.
+    grid = sc.parse_grids(CDXML_ONE_GRID)[0]
+    id_map = {"8": "claude-reactant1", "23": "claude-product1"}
+    result = sc.diagnose_component_mismatch(
+        grid, id_map, ["claude-reactant1"], ["claude-product1"])
+    assert result is not None
+    assert result["missing_product_ids"] == ["claude-product1"]
+    assert result["missing_reactant_ids"] == []
+    assert result["wrong_side_ids"] == []
+    assert result["expected_component_count"] == 2
+    assert result["actual_component_count"] == 1
+
+
+def test_diagnose_component_mismatch_flags_wrong_side():
+    # Product ref "23" re-classified as ComponentIsReactant="yes" --
+    # simulates a genuine misclassification (flipped side), not a drop.
+    text = CDXML_WITH_PRODUCT.replace(
+        'ComponentReferenceID="23">', 'ComponentReferenceID="23" ComponentIsReactant="yes">')
+    grid = sc.parse_grids(text)[0]
+    id_map = {"8": "claude-reactant1", "23": "claude-product1"}
+    result = sc.diagnose_component_mismatch(
+        grid, id_map, ["claude-reactant1"], ["claude-product1"])
+    assert result is not None
+    assert result["wrong_side_ids"] == ["claude-product1"]
+    assert result["missing_reactant_ids"] == []
+    # A flip is also a "missing from its expected side" -- the product
+    # never landed in found_product_ids at all, it landed in
+    # found_reactant_ids instead, so this shows up in both fields
+    # (wrong_side_ids names the specific misclassification, while
+    # missing_product_ids confirms the product side really is short one).
+    assert result["missing_product_ids"] == ["claude-product1"]
+
+
+def test_diagnose_component_mismatch_ignores_extra_untracked_components():
+    # A component whose ComponentReferenceID isn't in id_map at all (e.g.
+    # a stray structure this call never asked about) must not be counted
+    # against expected/actual totals or flagged as anything.
+    grid = sc.parse_grids(CDXML_WITH_PRODUCT)[0]
+    id_map = {"8": "claude-reactant1"}  # "23" deliberately left unmapped
+    result = sc.diagnose_component_mismatch(
+        grid, id_map, ["claude-reactant1"], ["claude-product1"])
+    assert result is not None
+    assert result["missing_product_ids"] == ["claude-product1"]

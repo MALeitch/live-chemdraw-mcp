@@ -246,6 +246,23 @@ through here" property is unchanged.
   (`domain.diff`, the same logic behind `chemdraw_diff_since_last_check`),
   reporting any object that moved WITHOUT being in the requested batch as
   `unexpected_moves`. Always check that field after a move.
+- A query call (`chemdraw_get_document_state`/`chemdraw_status`/
+  `chemdraw_describe_canvas`/`chemdraw_select`) immediately after ANY
+  mutating call can observe stale `doc.Groups`/`Atoms`/`Bonds` counts for
+  exactly one call — the per-document unit-list cache (`targets.py`'s
+  `doc_signature`-gated cache, see `_cache_for`) is only as fresh as the
+  live COM properties it reads, and ChemDraw's own internal state (window
+  focus, `ActiveDocument`) is confirmed to lag a COM call that otherwise
+  "landed" correctly (see `com/nudge.py`'s `bring_to_foreground`
+  docstring). Every document-lifecycle mutation already calls
+  `bring_to_foreground` afterward to settle this; `chemdraw_insert_
+  structure` was the one gap (fixed 2026-07-24, see
+  `bridge/_structure_io.py`). If a NEW mutating call is ever added here,
+  give it the same settle step and explicitly invalidate
+  `self._cache_for(doc)` (`targets._invalidate_cache`) rather than relying
+  on the next call's own signature check to notice — don't assume the
+  signature check alone is enough, since it can be fooled by exactly this
+  kind of transient staleness.
 - `IChemDrawObjects.Rotate(degrees, True)` on a whole unit is safe for
   chemistry (a rigid in-plane rotation can't create/destroy stereocenters)
   and always ends up axis-aligned, so its bounding box's width/height are an

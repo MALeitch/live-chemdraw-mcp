@@ -23,7 +23,13 @@ def register(mcp, bridge):
         separately under excluded_units. For full per-structure detail on a
         large page, use region-scoped chemdraw_describe_canvas or
         chemdraw_export_canvas_table rather than dumping the whole page.
-        Call this first if anything seems off."""
+        Call this first if anything seems off. Resolves the active
+        document even when app.ActiveDocument returns the known-flaky
+        None with 2+ documents open (the common case here, since this
+        connector's own scratch document is deliberately kept open
+        alongside your real one) — falls back to the last document this
+        connector actively worked on rather than silently omitting
+        structures_on_page/captions_on_page/boxes_on_page."""
         return as_json(bridge.status())
 
     @mcp.tool()
@@ -65,7 +71,13 @@ def register(mcp, bridge):
 
     @mcp.tool()
     def chemdraw_open_document(path: str) -> str:
-        """Open an existing ChemDraw file (.cdx/.cdxml/.mol/...) as the active document."""
+        """Open an existing ChemDraw file (.cdx/.cdxml/.mol/...) as the
+        active document. If the open lands but ChemDraw's own COM return
+        value comes back empty, this re-resolves the real document by
+        scanning open documents rather than failing -- if you still get an
+        error here right after writing the file yourself, retry once
+        before assuming the file is bad; a persistent failure means
+        ChemDraw genuinely rejected it."""
         return as_json(bridge.open_document(path))
 
     @mcp.tool()
@@ -153,7 +165,14 @@ def register(mcp, bridge):
         instead of two separate ion rows each with an individually wrong
         molecular weight). Each entry has the wrapper's own id/formula/
         bounds plus `wraps` (the ids of the fragments it contains). Empty
-        for an ordinary single-fragment insertion."""
+        for an ordinary single-fragment insertion.
+
+        A query immediately after this call (chemdraw_get_document_state,
+        chemdraw_status, chemdraw_describe_canvas) is safe to trust on the
+        first try — this call invalidates the shared per-document cache
+        and settles ChemDraw's window state before returning, so the
+        newly-inserted structure is never missing from the very next
+        query (a real, confirmed-live gap before 2026-07-24)."""
         if (x is None) != (y is None):
             raise ValueError("x and y must be given together, or both omitted")
         pos = (x, y) if x is not None else None

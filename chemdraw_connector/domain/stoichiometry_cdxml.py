@@ -283,6 +283,67 @@ def parse_grids(cdxml_text):
     return grids
 
 
+def diagnose_component_mismatch(grid, id_map, reactant_ids, product_ids):
+    """Cross-reference a freshly-built stoichiometry grid's actual
+    components against the reactant_ids/product_ids a caller asked for.
+
+    grid: one entry from parse_grids(text) (the grid just built).
+    id_map: raw ChemDraw Group ID (str) -> this connector's claude_id, for
+    every addressable structure unit in the document (see
+    bridge._Stoichiometry._raw_id_map).
+    reactant_ids/product_ids: the SAME lists chemdraw_make_stoichiometry_
+    table was called with.
+
+    Returns None if every requested id shows up in the grid on the
+    expected side, else a dict describing exactly what went wrong:
+    {"expected_component_count": int, "actual_component_count": int,
+     "missing_reactant_ids": [...], "missing_product_ids": [...],
+     "wrong_side_ids": [...]}
+    (component counts here exclude header/row-label rows on both sides --
+    ChemDraw draws one header per side that HAS at least one real
+    component, e.g. 2 headers for a healthy reactant+product grid but only
+    1 when the product side was entirely dropped, so comparing raw
+    grid["components"] length against a hardcoded header count would
+    misfire on the healthy case) -- so a caller
+    (chemdraw_make_stoichiometry_table) can flag a silent ChemDraw
+    misclassification instead of returning a table that looks complete but
+    isn't. Root cause this catches: ChemDraw's own MakeStoichiometryGrid
+    infers each component's reactant/product role from which side of ONE
+    arrow it sits on — a caller whose reactants/products are scattered
+    across more than one row (e.g. a 2-step scheme) silently gets
+    components dropped or flipped to the wrong side, with no error from
+    ChemDraw itself."""
+    expected_reactants, expected_products = set(reactant_ids), set(product_ids)
+    found_reactant_ids, found_product_ids = set(), set()
+    actual_total = 0
+    for comp in grid["components"]:
+        if comp["is_header"]:
+            continue
+        actual_total += 1
+        sid = id_map.get(comp["structure_ref_id"])
+        if sid is None:
+            continue
+        (found_reactant_ids if comp["is_reactant"] else found_product_ids).add(sid)
+
+    missing_reactants = sorted(expected_reactants - found_reactant_ids)
+    missing_products = sorted(expected_products - found_product_ids)
+    wrong_side = sorted(
+        (found_reactant_ids & expected_products) |
+        (found_product_ids & expected_reactants)
+    )
+    expected_total = len(reactant_ids) + len(product_ids)
+    if not missing_reactants and not missing_products and not wrong_side \
+            and actual_total == expected_total:
+        return None
+    return {
+        "expected_component_count": expected_total,
+        "actual_component_count": actual_total,
+        "missing_reactant_ids": missing_reactants,
+        "missing_product_ids": missing_products,
+        "wrong_side_ids": wrong_side,
+    }
+
+
 def _float_or_none(value):
     if value is None:
         return None

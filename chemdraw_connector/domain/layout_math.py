@@ -172,6 +172,26 @@ def arrow_length_for_reagents(reagents_width, min_len=70.0, padding=20.0):
     return max(min_len, reagents_width + padding)
 
 
+def next_scheme_anchor_y(existing_bottoms, default_y=120.0, margin=40.0):
+    """y-anchor (row center) for a new reaction scheme's structures.
+
+    existing_bottoms: bottom-edge floats for every structure/caption/arrow
+    already on the page BEFORE this call (empty if the canvas is empty).
+    Returns default_y unchanged when the canvas is empty (preserves the
+    original fixed-position behavior for the common single-scheme case);
+    otherwise returns max(existing_bottoms) + margin, so a second call
+    appends BELOW existing content instead of always drawing at the same
+    fixed row. Confirmed live: calling make_reaction_scheme twice in a row
+    (e.g. a second reaction step) silently drew the second scheme directly
+    on top of the first, with no warning — no bounds-check against
+    PRE-EXISTING content existed anywhere in that function; find_overlaps/
+    page_overflow only check the newly-placed elements from the SAME call
+    against each other/the page, never against what was already there."""
+    if not existing_bottoms:
+        return default_y
+    return max(existing_bottoms) + margin
+
+
 def plan_reaction_layout(reactant_groups, product_groups, arrow_len,
                          start_x=60.0, gap=24.0, plus_width=18.0,
                          intra_group_gap=8.0):
@@ -213,8 +233,15 @@ def plan_reaction_layout(reactant_groups, product_groups, arrow_len,
         positions = []
         for i, widths in enumerate(groups):
             if i:
-                plus_positions.append(x)
-                x += plus_width
+                # Center the "+" between the previous group's right edge
+                # and the next group's left edge.
+                # After the previous group, x = previous_right_edge + gap.
+                # The next group will start at x + gap.
+                # Midpoint between groups = x - gap/2 + x + gap/2 = x.
+                # So "+" center should be at x, left edge at x - plus_width/2.
+                plus_left = x - plus_width / 2.0
+                plus_positions.append(plus_left)
+                x += gap
             group_positions = []
             last = len(widths) - 1
             for j, w in enumerate(widths):

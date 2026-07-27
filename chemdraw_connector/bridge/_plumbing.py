@@ -155,20 +155,31 @@ class _Plumbing:
         self._doc_name = doc.name
         return doc
 
-    @staticmethod
-    def _active_document_name(app):
+    def _active_document_name(self, app):
         """Best-effort active-document name for a pure status/read query —
         no retry, no .Activate() side effect (a status call must never
         move window focus). app.ActiveDocument is the same known-flaky COM
         property _doc() works around for mutating calls (see its own
-        docstring); here, a single fallback covers the common case a
-        one-shot read actually hits: exactly one document open but
-        ActiveDocument came back None anyway. With 0 or 2+ documents open
-        and ActiveDocument still None, there's no reasonable single guess,
-        so this returns None rather than picking arbitrarily."""
+        docstring). Three read-only tiers: (1) trust ActiveDocument when
+        it answers; (2) fall back to the tracked working document name
+        (self._doc_name, kept in sync by every mutating call via _doc())
+        if it's still open — this covers the common case of 2+ documents
+        open (this connector's own scratch document deliberately kept
+        open alongside the user's real one, by design — see
+        use_scratch_document) where ActiveDocument comes back flaky-None
+        and there's no sole survivor to fall back to either; confirmed
+        live, this used to silently blank chemdraw_status's entire
+        structures/captions/boxes block with no error in exactly that
+        case; (3) the sole-survivor fallback for the remaining case where
+        exactly one document is open but nothing has been tracked yet."""
         active = app.ActiveDocument
         if active is not None:
             return active.name
+        if self._doc_name:
+            for i in range(1, app.Documents.Count + 1):
+                cand = app.Documents.Item(i)
+                if cand.name == self._doc_name:
+                    return cand.name
         if app.Documents.Count == 1:
             return app.Documents.Item(1).name
         return None
@@ -303,6 +314,17 @@ class _Plumbing:
             for i in range(groups_before + 1, doc.Groups.Count + 1)
         ]
         kept, wrappers = self._split_wrapper_groups(new_units)
+        # Every OTHER document mutation either changes doc_signature in a
+        # way the NEXT iter_units/status/describe_canvas call notices on
+        # its own, or explicitly invalidates first (see resolve_atom/
+        # resolve_bond's own _invalidate_cache precedent). This insert
+        # path relied ENTIRELY on that indirect signal — the new Groups/
+        # Atoms/Bonds counts differing from whatever was cached before —
+        # with no invalidation of its own. Confirmed live: a query call
+        # immediately after insert_structure could still see the stale
+        # pre-insert unit list for one call. Force it explicitly instead
+        # of trusting the next caller's signature check to catch it.
+        targets._invalidate_cache(self._cache_for(doc))
         return (kept, wrappers) if include_wrappers else kept
 
     @staticmethod

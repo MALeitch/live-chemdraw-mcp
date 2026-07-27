@@ -2,8 +2,8 @@ import pytest
 
 from chemdraw_connector.domain.layout_math import (
     Box, arrow_length_for_reagents, caption_anchor, choose_columns,
-    distribute_vertical, find_overlaps, grid_positions, page_overflow,
-    page_width_points, plan_reaction_layout, shelf_pack,
+    distribute_vertical, find_overlaps, grid_positions, next_scheme_anchor_y,
+    page_overflow, page_width_points, plan_reaction_layout, shelf_pack,
     stoichiometry_arrow_span,
 )
 
@@ -219,14 +219,21 @@ def test_arrow_length_for_reagents_custom_min_and_padding():
 
 def test_plan_reaction_layout_two_reactants_one_product():
     # A (w=50) + B (w=30) --arrow--> C (w=80)
+    # With the corrected layout math, the "+" is centered in the gap between
+    # groups: previous_group_right + gap/2 (which equals the "x" cursor after
+    # the previous group). The "+" left edge is at x - plus_width/2.
     reactant_positions, product_positions, plus_positions, arrow_left_x = (
         plan_reaction_layout([[50], [30]], [[80]], arrow_len=70.0,
                              start_x=60.0, gap=24.0, plus_width=18.0))
-    assert reactant_positions == [[60.0], [152.0]]
-    assert plus_positions == [134.0]  # "+" between the two reactants
-    assert arrow_left_x == 206.0
-    assert product_positions == [[300.0]]
-    # no product-side "+" since there's only one product group
+    # Group 1 (w=50): x=60, ends at 60+50+24=134
+    # "+" centered at x=134, left edge at 134-9=125
+    # Group 2 (w=30): starts at x=134+24=158, ends at 158+30+24=212
+    # Arrow starts at 212
+    # Product: starts at 212+70+24=306
+    assert reactant_positions == [[60.0], [158.0]]
+    assert plus_positions == [125.0]  # "+" between the two reactants (left edge)
+    assert arrow_left_x == 212.0
+    assert product_positions == [[306.0]]
     assert len(plus_positions) == 1
 
 
@@ -239,15 +246,16 @@ def test_plan_reaction_layout_multi_step_reagent_intermediate_product():
                              start_x=10.0, gap=5.0, plus_width=8.0,
                              intra_group_gap=2.0))
     assert reactant_positions == [[10.0]]
-    assert arrow_left_x == 55.0  # 10 + 40 + 5
-    # first product group starts right after the arrow's reserved space
-    assert product_positions[0] == [130.0]  # 55 + 70 + 5
-    # second product group: "+" placed at 195 (130 + 60 + 5), THEN the x
-    # cursor advances past plus_width before its two fragments are laid
-    # out contiguously using intra_group_gap (2.0), not gap (5.0), between
-    # them
-    assert plus_positions == [195.0]
-    assert product_positions[1] == [203.0, 225.0]  # 195 + 8 plus_width, then +20+2
+    # Reactant (w=40): x=10, ends at 10+40+5=55
+    # Arrow starts at 55
+    assert arrow_left_x == 55.0
+    # Product 1 (w=60): starts at 55+70+5=130, ends at 130+60+5=195
+    # "+" centered at x=195, left edge at 195-4=191
+    # Product 2 group (w=20, 15): starts at 195+5=200
+    # Fragment 1 at x=200, Fragment 2 at 200+20+2=222
+    assert product_positions[0] == [130.0]
+    assert plus_positions == [191.0]
+    assert product_positions[1] == [200.0, 222.0]
 
 
 def test_plan_reaction_layout_intra_group_gap_defaults_tighter_than_gap():
@@ -315,3 +323,15 @@ def test_plan_reaction_layout_no_plus_signs_for_single_groups():
     reactant_positions, product_positions, plus_positions, arrow_left_x = (
         plan_reaction_layout([[40]], [[40]], arrow_len=70.0))
     assert plus_positions == []
+
+
+def test_next_scheme_anchor_y_default_when_canvas_empty():
+    assert next_scheme_anchor_y([]) == 120.0
+
+
+def test_next_scheme_anchor_y_appends_below_existing_content():
+    assert next_scheme_anchor_y([80.0, 95.0, 60.0]) == 95.0 + 40.0
+
+
+def test_next_scheme_anchor_y_respects_custom_default_and_margin():
+    assert next_scheme_anchor_y([50.0], default_y=200.0, margin=10.0) == 60.0

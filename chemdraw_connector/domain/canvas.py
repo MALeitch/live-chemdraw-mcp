@@ -449,7 +449,7 @@ def resolve_region(region, boxes):
 
 
 def build_canvas(units, captions, boxes, region=None,
-                 page_width=None, page_height=None):
+                 page_width=None, page_height=None, doc=None):
     """Assemble the one-call semantic picture of a page.
 
     units/captions/boxes: the plain dicts bridge gathers (see module
@@ -465,7 +465,10 @@ def build_canvas(units, captions, boxes, region=None,
     real page: overflowing_box only catches a structure escaping a panel
     BOX, not the page itself, and the preview image auto-crops to whatever
     was drawn so it can't show a page edge either. Omit to skip the check
-    entirely (e.g. callers with no reliable page size)."""
+    entirely (e.g. callers with no reliable page size).
+
+    doc: optional COM document object to check for stoichiometry grid overlaps.
+    """
     real, wrapper_map, union_wrapper_map, others = classify_units(units)
     # union_wrapper_map is deliberately NOT passed to associate_captions --
     # its {wrapper_id: single_structure_id} contract assumes one wrapped
@@ -540,6 +543,31 @@ def build_canvas(units, captions, boxes, region=None,
         [layout_math.Box(**s["bounds"]) for s in with_bounds],
         ids=[s["id"] for s in with_bounds])
 
+    # Also check overlaps with stoichiometry grids
+    stoich_overlaps = []
+    if doc is not None:
+        for i in range(1, doc.StoichiometryGrids.Count + 1):
+            try:
+                grid = doc.StoichiometryGrids.Item(i)
+                grid_box = layout_math.Box(grid.Left, grid.Top, grid.Right, grid.Bottom)
+                grid_id = f"stoich_grid_{grid.ID}"
+                for s in with_bounds:
+                    s_box = layout_math.Box(**s["bounds"])
+                    ox = min(s_box.right, grid_box.right) - max(s_box.left, grid_box.left)
+                    oy = min(s_box.bottom, grid_box.bottom) - max(s_box.top, grid_box.top)
+                    if ox > 0 and oy > 0:
+                        stoich_overlaps.append((s["id"], grid_id))
+                # Also check captions
+                for c in captions_out:
+                    if c.get("bounds"):
+                        c_box = layout_math.Box(**c["bounds"])
+                        ox = min(c_box.right, grid_box.right) - max(c_box.left, grid_box.left)
+                        oy = min(c_box.bottom, grid_box.bottom) - max(c_box.top, grid_box.top)
+                        if ox > 0 and oy > 0:
+                            stoich_overlaps.append((c["id"], grid_id))
+            except Exception:
+                pass
+
     off_page = []
     if page_width is not None and page_height is not None:
         # Captions sit ~12pt below their structure's bottom edge by this
@@ -590,5 +618,6 @@ def build_canvas(units, captions, boxes, region=None,
             "overlapping_structures": [list(p) for p in overlaps],
             "overflowing_box": overflowing,
             "off_page": off_page,
+            "stoichiometry_grid_overlaps": stoich_overlaps,
         },
     }

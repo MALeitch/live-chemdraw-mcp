@@ -15,15 +15,29 @@ class _DocumentSession:
         def go():
             info = self._conn.info()
             app = self._conn.app()
-            doc = app.ActiveDocument
             # Raw ActiveDocument can come back None even with exactly one
             # document open (known-flaky COM property, see _doc()'s own
-            # docstring) -- _active_document_name's sole-survivor fallback
-            # covers that case for the reported name without forcing focus.
-            info["active_document"] = self._active_document_name(app)
+            # docstring) -- _active_document_name's tracked-name/sole-
+            # survivor fallbacks cover that case for the reported name
+            # without forcing focus. Resolve `doc` through that SAME name
+            # (rather than a bare app.ActiveDocument + single-document-
+            # only fallback, this call's own prior behavior) so this
+            # structures/captions/boxes block can't disagree with the
+            # active_document already reported above, and so a flaky
+            # ActiveDocument with 2+ documents open -- the common case
+            # here, since use_scratch_document deliberately keeps a second
+            # document open -- no longer silently blanks this whole block
+            # with no error (confirmed live gap, fixed 2026-07-24).
+            active_name = self._active_document_name(app)
+            info["active_document"] = active_name
             info["open_documents"] = app.Documents.Count
-            if doc is None and app.Documents.Count == 1:
-                doc = app.Documents.Item(1)
+            doc = app.ActiveDocument
+            if doc is None and active_name is not None:
+                for i in range(1, app.Documents.Count + 1):
+                    cand = app.Documents.Item(i)
+                    if cand.name == active_name:
+                        doc = cand
+                        break
             if doc is not None:
                 snap = state.build_snapshot(doc, self._cache_for(doc))
                 real, wrapper_map, union_wrapper_map, others = canvas.classify_units(snap)
@@ -252,11 +266,50 @@ class _DocumentSession:
                     f"{path!r} exists but is not a file (e.g. a directory). "
                     "Pass the path to the document itself."
                 )
-            doc = self._conn.app().Documents.Open(path)
+            app = self._conn.app()
+            count_before = app.Documents.Count
+            doc = app.Documents.Open(path)
+            if doc is None:
+                # Documents.Open() can return None even when the open
+                # actually landed (the same class of flaky document-
+                # returning COM property this file already distrusts
+                # everywhere else -- see _doc()'s own docstring on
+                # ActiveDocument, and set_active_document/
+                # _close_document_now re-resolving by scanning
+                # app.Documents rather than trusting a raw handle). This
+                # was the one document-returning path that didn't, and
+                # crashed with a bare AttributeError on doc.Activate().
+                doc = self._resolve_opened_document(app, path, count_before)
             doc.Activate()
             nudge.bring_to_foreground(self._conn.hwnd)
             return {"active_document": doc.name, "path": path}
         return self._run(go, timeout=SLOW_TIMEOUT)
+
+    @staticmethod
+    def _resolve_opened_document(app, path, count_before):
+        """Re-resolve Documents.Open(path)'s real result when the COM call
+        itself returned None. Scans app.Documents for a FullName match
+        first (most reliable), then falls back to the newly-appended last
+        item if Documents.Count increased (Open() appends to the
+        collection), and only raises if neither signal confirms the open
+        actually happened -- never lets a bare None reach .Activate()."""
+        target = os.path.normcase(os.path.abspath(path))
+        for i in range(1, app.Documents.Count + 1):
+            cand = app.Documents.Item(i)
+            try:
+                same = os.path.normcase(os.path.abspath(cand.FullName)) == target
+            except Exception:
+                same = False
+            if same:
+                return cand
+        if app.Documents.Count > count_before:
+            return app.Documents.Item(app.Documents.Count)
+        raise ChemDrawError(
+            f"ChemDraw did not open {path!r} — Documents.Open() returned "
+            "nothing and no matching document appeared in Documents "
+            f"afterward (open_documents stayed at {app.Documents.Count}). "
+            "Check the ChemDraw window for an error dialog."
+        )
 
     def save_document(self, path=None, overwrite=False):
         def go():

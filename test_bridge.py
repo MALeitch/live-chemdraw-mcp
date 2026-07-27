@@ -401,7 +401,7 @@ def main():
         assert len(base64.b64decode(img["base64"])) > 500
     tmp_png = os.path.join(tempfile.gettempdir(), "chemdraw_smoke.png")
     check("export_image png to file",
-          lambda: b.export_image("png", "document", tmp_png, dpi=150))
+          lambda: b.export_image("png", "document", tmp_png, dpi=150, overwrite=True))
     check("copy_to_clipboard", lambda: b.copy_to_clipboard(asp_id))
 
     print("== style ==")
@@ -688,7 +688,7 @@ def main():
     if en:
         assert en["count"] == 5 and not en["failed"], en
         tmp_csv = os.path.join(tempfile.gettempdir(), "chemdraw_smoke.csv")
-        check("export csv", lambda: b.export_data_table(en["derivatives"], tmp_csv))
+        check("export csv", lambda: b.export_data_table(en["derivatives"], tmp_csv, overwrite=True))
 
     print("== ionic wrapper surfaced + no false-positive overlap (cleared scratch) ==")
     check("clear scratch", b.use_scratch_document)

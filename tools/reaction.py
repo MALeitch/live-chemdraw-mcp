@@ -7,9 +7,20 @@ def register(mcp, bridge):
     def chemdraw_make_reaction_scheme(reactants: list[str], products: list[str],
                                       reagents_text: str = "",
                                       format: str = "smiles",
-                                      conditions_text: str = ""):
+                                      conditions_text: str = "",
+                                      anchor_y: float | None = None):
         """Draw a reaction scheme: reactants + arrow + products, laid out
         left to right.
+
+        Auto-appends below existing content by default: if the canvas
+        already has structures/captions/arrows on it, this scheme is drawn
+        BELOW the lowest existing one rather than always at the same fixed
+        row — calling this tool twice in a row (e.g. to draw a second
+        reaction step) no longer silently draws on top of the first scheme
+        with no warning (confirmed live bug, fixed 2026-07-24). Pass
+        anchor_y explicitly to override auto-append and force a specific
+        row instead (e.g. anchor_y=120.0 for the old fixed-position
+        behavior regardless of what's already on the canvas).
 
         Standard single-step-scheme convention (ACS style and similar
         journals) — use BOTH text params, not just reagents_text, for any
@@ -45,4 +56,4 @@ def register(mcp, bridge):
         drawn rather than the page boundary."""
         return with_preview(bridge.make_reaction_scheme(
             reactants, products, reagents_text or None, format,
-            conditions_text or None))
+            conditions_text or None, anchor_y))

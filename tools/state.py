@@ -23,7 +23,11 @@ def register(mcp, bridge):
         exceed the inline result size limit — prefer chemdraw_status for
         counts, or chemdraw_describe_canvas with region_json to scope to
         one panel, or chemdraw_export_canvas_table for a full-page export
-        you page through as a file."""
+        you page through as a file. Immediately after any structure-
+        inserting/mutating tool call, this is always safe to trust on the
+        first try (this connector invalidates its own cache and settles
+        ChemDraw's window state before every mutating call returns) — you
+        do not need a defensive "call it twice" workaround."""
         return as_json(bridge.get_document_state())
 
     @mcp.tool()

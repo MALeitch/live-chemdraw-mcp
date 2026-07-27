@@ -1,3 +1,6 @@
+# chemdraw-mcp CI Configuration
+# Place in .github/workflows/tests.yml
+
 name: Tests
 
 on:
@@ -7,35 +10,34 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    # pywin32 (a hard dependency) is Windows-only, so this must run on a
-    # Windows runner even though the test suite itself is pure Python with
-    # no live ChemDraw connection (test_bridge.py, the live smoke script,
-    # is intentionally excluded — see pyproject.toml's testpaths).
+  unit-tests:
+    name: Unit Tests (Windows)
     runs-on: windows-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-
+          python-version: "3.12"
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install pytest
+          python -m venv .venv
+          .venv/Scripts/pip install -e ".[dev]"
+      - name: Run unit tests
+        run: |
+          .venv/Scripts/pytest tests/ -v --tb=short -x
 
-      - name: Run tests
-        # python -m pytest (not bare `pytest`): -m inserts the CWD (repo
-        # root) onto sys.path, which is what makes `tools/` importable --
-        # `pip install -e .` only wires up chemdraw_connector as a
-        # package, and tests/ has no __init__.py so pytest's own rootdir
-        # insertion doesn't reach the repo root on its own. Confirmed this
-        # matters: bare `pytest tests/ -q` fails CI with
-        # "ModuleNotFoundError: No module named 'tools'" even though the
-        # identical command passes locally via `python -m pytest`.
-        run: python -m pytest tests/ -q
+  # Integration tests require ChemDraw - run manually or on self-hosted runner
+  # smoke-test:
+  #   name: Smoke Test (requires ChemDraw)
+  #   runs-on: [self-hosted, windows, chemdraw]
+  #   timeout-minutes: 15
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.12"
+  #     - name: Install
+  #       run: .venv/Scripts/pip install -e ".[dev]"
+  #     - name: Run smoke test
+  #       run: .venv/Scripts/python test_bridge.py

@@ -9,7 +9,8 @@ _POSITION_TOLERANCE = 0.5  # points; see the verify-and-correct step below
 
 class _Reaction:
     def make_reaction_scheme(self, reactants, products, reagents_text=None,
-                             fmt="smiles", conditions_text=None):
+                             fmt="smiles", conditions_text=None,
+                             anchor_y=None):
         """Insert -> plan -> move -> annotate, in that strict order (four
         separate passes, not interleaved). Confirmed live: an earlier
         version that inserted each structure and moved it immediately,
@@ -83,7 +84,33 @@ class _Reaction:
         def go():
             doc = self._doc()
             backup = self._maybe_snapshot(doc)
-            y = 120.0
+            cache = self._cache_for(doc)
+            if anchor_y is not None:
+                y = anchor_y
+            else:
+                # Auto-append below existing content by default instead of
+                # always drawing at the same fixed row (see layout_math.
+                # next_scheme_anchor_y's own docstring for the confirmed
+                # live bug this replaces). Cheap, cache-backed COM reads
+                # only (targets.iter_units + Captions/Arrows collections)
+                # -- NOT state.build_snapshot, which pays for a full CDXML
+                # export already covered by _maybe_snapshot just above.
+                existing_bottoms = []
+                for u in targets.iter_units(doc, cache):
+                    try:
+                        existing_bottoms.append(u.Bottom)
+                    except Exception:
+                        continue
+                for coll_name in ("Captions", "Arrows"):
+                    coll = getattr(doc, coll_name, None)
+                    if coll is None:
+                        continue
+                    for i in range(1, coll.Count + 1):
+                        try:
+                            existing_bottoms.append(coll.Item(i).Bottom)
+                        except Exception:
+                            continue
+                y = layout_math.next_scheme_anchor_y(existing_bottoms)
             gap = 24.0
             plus_width = 18.0
 
@@ -208,6 +235,45 @@ class _Reaction:
                 ids.append(uid)
                 placed_units.append((u, uid))
 
+            # Compute actual "+" positions from the REAL structure positions
+            # after phase 3 moves, not from the phase 2 plan.
+            # Reconstruct the original group structure from placed_units.
+            reactant_group_sizes = [len(g) for g in reactant_units]
+            product_group_sizes = [len(g) for g in product_units]
+
+            # Split placed_units into reactant and product groups
+            total_reactant_units = sum(reactant_group_sizes)
+            reactant_placed_flat = [u for u, _ in placed_units[:total_reactant_units]]
+            product_placed_flat = [u for u, _ in placed_units[total_reactant_units:]]
+
+            # Reconstruct groups
+            reactant_placed_groups = []
+            idx = 0
+            for size in reactant_group_sizes:
+                reactant_placed_groups.append(reactant_placed_flat[idx:idx + size])
+                idx += size
+
+            product_placed_groups = []
+            idx = 0
+            for size in product_group_sizes:
+                product_placed_groups.append(product_placed_flat[idx:idx + size])
+                idx += size
+
+            actual_plus_positions = []
+            # Reactant "+" positions (between adjacent reactant groups)
+            for i in range(len(reactant_placed_groups) - 1):
+                prev_right = max(u.Right for u in reactant_placed_groups[i])
+                curr_left = min(u.Left for u in reactant_placed_groups[i + 1])
+                mid = (prev_right + curr_left) / 2.0
+                actual_plus_positions.append(mid)
+
+            # Product "+" positions (between adjacent product groups)
+            for i in range(len(product_placed_groups) - 1):
+                prev_right = max(u.Right for u in product_placed_groups[i])
+                curr_left = min(u.Left for u in product_placed_groups[i + 1])
+                mid = (prev_right + curr_left) / 2.0
+                actual_plus_positions.append(mid)
+
             # Phase 4: arrow, "+"s, and reagents text -- placed last, from
             # the plan built in phase 2, now that every structure's final
             # position is locked in. Every caption here is centered on its
@@ -272,20 +338,53 @@ class _Reaction:
             # gathered so the overlap check below covers the WHOLE scheme --
             # a caption or the arrow colliding with something is just as
             # "not clean" as two structures colliding.
-            for i, px in enumerate(plus_positions):
-                label = f"+{i}"
-                # plus_positions holds the LEFT edge of each reserved
-                # plus_width-wide slot (layout_math.plan_reaction_layout
-                # appends x before advancing it by plus_width), not a
-                # center -- place_centered_caption expects a true center,
-                # so the slot's own center is px + plus_width / 2. Passing
-                # px directly here previously landed every "+" shifted
-                # left by half the slot width.
-                plus_center_x = px + plus_width / 2.0
-                decorations.append(
-                    (label, place_centered_caption(label, "+", plus_center_x, y)))
 
-            arrow_center_x = arrow_left_x + arrow_len / 2.0
+            # Compute actual "+" positions from the REAL structure positions after phase 3
+            # placed_units contains (unit, uid) tuples in the order they were placed
+            # reactant_units and product_units were used for planning, but placed_units
+            # has the actual moved positions. We need to extract the actual positions.
+            reactant_placed = [u for u, _ in placed_units[:sum(len(u) for u in reactant_units)]]
+            product_placed = [u for u, _ in placed_units[len(reactant_placed):]]
+            
+            # Group them back into their original groups
+            # reactant_units is a list of groups, each group is a list of units
+            # We need to reconstruct the grouping from placed_units
+            reactant_placed_groups = []
+            idx = 0
+            for group in reactant_units:
+                group_size = len(group)
+                actual_group = []
+                for _ in range(group_size):
+                    actual_group.append(placed_units[idx][0])
+                    idx += 1
+                reactant_placed_groups.append(actual_group)
+            
+            product_placed_groups = []
+            for group in product_units:
+                group_size = len(group)
+                actual_group = []
+                for _ in range(group_size):
+                    actual_group.append(placed_units[idx][0])
+                    idx += 1
+                product_placed_groups.append(actual_group)
+            
+            actual_plus_positions = []
+            for i in range(len(reactant_placed_groups) - 1):
+                right_edge = max(u.Right for u in reactant_placed_groups[i])
+                left_edge = min(u.Left for u in reactant_placed_groups[i + 1])
+                mid = (right_edge + left_edge) / 2.0
+                actual_plus_positions.append(mid)
+
+            for i in range(len(product_placed_groups) - 1):
+                right_edge = max(u.Right for u in product_placed_groups[i])
+                left_edge = min(u.Left for u in product_placed_groups[i + 1])
+                mid = (right_edge + left_edge) / 2.0
+                actual_plus_positions.append(mid)
+
+            for i, mid_x in enumerate(actual_plus_positions):
+                label = f"+{i}"
+                decorations.append(
+                    (label, place_centered_caption(label, "+", mid_x, y)))
             arrow_ok = False
             arrow_id = None
             try:
@@ -303,6 +402,7 @@ class _Reaction:
                 # Start the right edge to preserve the arrowhead pointing
                 # right, toward the products, exactly as MakeArrow() draws
                 # it by default.
+                arrow_center_x = arrow_left_x + arrow_len / 2.0
                 end_pt = arrow.End
                 end_pt.X, end_pt.Y = arrow_left_x, y
                 arrow.End = end_pt
@@ -318,6 +418,7 @@ class _Reaction:
                 arrow_id = targets.ensure_id(arrow)
                 decorations.append(("arrow", arrow))
             except Exception:
+                arrow_center_x = arrow_left_x + arrow_len / 2.0
                 decorations.append(
                     ("arrow", place_centered_caption("arrow", "→", arrow_center_x, y)))
 

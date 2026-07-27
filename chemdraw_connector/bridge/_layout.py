@@ -321,6 +321,50 @@ class _Layout:
                 "tag_owner_id": tag_owner_id,
             })
             objs.append(c)
+        
+        # Also capture stoichiometry grid internal captions (Products/Reactants headers,
+        # Expected Mass, etc.) — these are NOT in doc.Captions collection
+        for i in range(1, doc.StoichiometryGrids.Count + 1):
+            try:
+                grid = doc.StoichiometryGrids.Item(i)
+            except Exception:
+                continue
+            for j in range(1, grid.Components.Count + 1):
+                try:
+                    comp = grid.Components.Item(j)
+                    # Check if component has caption text
+                    comp_text = ""
+                    try:
+                        if hasattr(comp, 'Text'):
+                            comp_text = comp.Text or ""
+                    except Exception:
+                        pass
+                    # Also check sgdatum for text content
+                    if not comp_text:
+                        try:
+                            for k in range(1, comp.SGData.Count + 1):
+                                sgd = comp.SGData.Item(k)
+                                if hasattr(sgd, 'SGDataValue') and sgd.SGDataValue:
+                                    comp_text = str(sgd.SGDataValue)
+                                    break
+                        except Exception:
+                            pass
+                    
+                    if comp_text:
+                        entries.append({
+                            "id": f"stoich_grid_{i}_comp_{j}",
+                            "text": mojibake.fix_mojibake(comp_text),
+                            "bounds": {
+                                "left": round(comp.Left, 1), "top": round(comp.Top, 1),
+                                "right": round(comp.Right, 1), "bottom": round(comp.Bottom, 1)
+                            },
+                            "group_id": None,
+                            "tag_owner_id": None,
+                        })
+                        objs.append(comp)
+                except Exception:
+                    pass
+        
         return entries, objs
 
     @staticmethod
@@ -476,7 +520,8 @@ class _Layout:
             out = canvas.build_canvas(
                 units, cap_entries, boxes, region=rect,
                 page_width=float(doc.Width or 540.0),
-                page_height=float(doc.Height or 720.0))
+                page_height=float(doc.Height or 720.0),
+                doc=doc)
             if rect is not None:
                 out["region"] = rect
             return out
@@ -504,7 +549,7 @@ class _Layout:
             units = state.build_snapshot(doc, self._cache_for(doc))
             cap_entries, _ = self._gather_captions(doc)
             boxes = self._graphics_boxes(doc)
-            built = canvas.build_canvas(units, cap_entries, boxes)
+            built = canvas.build_canvas(units, cap_entries, boxes, doc=doc)
             rows = canvas.canvas_to_rows(built)
             out_path = path or os.path.join(
                 os.path.dirname(snapshots.BACKUP_DIR),
