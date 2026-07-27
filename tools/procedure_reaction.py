@@ -1,8 +1,11 @@
-"""Composite reaction-scheme-plus-verification tool.
+"""Composite reaction-scheme tools: single-step verification, and
+multi-step routes.
 
 Bundles chemdraw_make_reaction_scheme with the QC calls a careful user
 would always make right afterward, so Claude doesn't have to decide (and
-remember) to run them as separate follow-up tool calls."""
+remember) to run them as separate follow-up tool calls. Also provides
+chemdraw_make_reaction_route, a thin loop over the single-step builder for
+drawing a whole multi-step synthesis at once."""
 from ._common import with_preview
 
 
@@ -13,7 +16,8 @@ def register(mcp, bridge):
         reagents_text: str = "",
         format: str = "smiles",
         conditions_text: str = "",
-        anchor_y: float | None = None):
+        anchor_y: float | None = None,
+        yields: list | None = None):
         """Draw a reaction scheme AND auto-verify it in one call: this is
         chemdraw_make_reaction_scheme immediately followed by
         chemdraw_check_warnings (scoped to just the structures this call
@@ -84,13 +88,76 @@ def register(mcp, bridge):
         do not just report the scheme as done — resolve each one (edit
         the flagged atom/bond, deduplicate the repeated structure, fix
         the overlap/off-page placement) or explicitly flag it to the user
-        before moving on."""
+        before moving on.
+
+        yields: optional list parallel to products (one entry per
+        product). A number auto-formats as a percent ("92" -> "92%"); a
+        string is used as-is ("quant.", "85% (2 steps)"); None/omitted
+        means no caption for that product."""
         result = bridge.make_reaction_scheme(
             reactants, products, reagents_text or None, format,
-            conditions_text or None, anchor_y)
+            conditions_text or None, anchor_y, yields)
 
         object_ids = result.get("object_ids") or []
         result["warnings"] = bridge.check_warnings(object_ids)
         result["duplicate_groups"] = bridge.find_duplicates("document")
 
+        return with_preview(result)
+
+    @mcp.tool()
+    def chemdraw_make_reaction_route(steps: list[dict]):
+        """Draw a multi-step synthesis route: one reaction scheme per step,
+        auto-stacked top to bottom on the page in order (no need to manage
+        vertical position yourself). Each step dict:
+        - reactants, products (REQUIRED): lists of structures, e.g.
+          ["CC(=O)Cl", "c1ccccc1O"].
+        - format (optional, default "smiles"): applies to that step's
+          reactants/products only -- different steps may use different
+          formats.
+        - reagents_text, conditions_text (optional): same meaning as
+          chemdraw_make_reaction_scheme_verified -- reagents/catalysts
+          above the arrow, solvent/temperature/time/special conditions
+          below it.
+        - yields (optional): list parallel to that step's products, one
+          entry per product. A number auto-formats as a percent ("92" ->
+          "92%"); a string is used as-is ("quant.", "85% (2 steps)").
+
+        A compound that's both one step's product and the next step's
+        reactant (a common intermediate) should just have its SMILES
+        repeated in both steps -- this matches how published multi-step
+        routes are actually drawn (each step is visually self-contained),
+        not a workaround. Because of that, `duplicate_groups` (checked
+        once over the WHOLE route at the end, not per step) will
+        correctly flag that repeated intermediate -- that is EXPECTED for
+        any real chained route, not a bug to fix.
+
+        Each step is independent: if one step fails (bad SMILES, a
+        missing reactants/products key, etc.) it's reported in `failed`
+        by its step_index and error, but every OTHER step still gets
+        drawn -- the whole route never aborts because of one bad step.
+
+        Result fields:
+        - steps: one entry per successfully-drawn step, each with the
+          same object_ids/arrow_object_id/violations/warnings fields as
+          chemdraw_make_reaction_scheme_verified, plus its own step_index.
+          ALWAYS check each step's violations.overlapping/
+          mislaid_captions/off_page and warnings.flagged the same way you
+          would for a single scheme.
+        - failed: steps that raised an error, with step_index and error.
+        - duplicate_groups: chemdraw_find_duplicates over the whole
+          document, checked once after every step is drawn -- see the
+          repeated-intermediate note above before treating any entry here
+          as a problem.
+
+        Includes one preview image at the end (the whole document after
+        the last successfully-drawn step, not per-step) -- look at it to
+        confirm the whole route reads correctly top to bottom."""
+        result = bridge.make_reaction_route(steps)
+        preview = None
+        for step in result["steps"]:
+            png = step.pop("preview_png_base64", None)
+            if png:
+                preview = png  # each step's own preview is already a
+                                # whole-document render; keep the last one
+        result["preview_png_base64"] = preview
         return with_preview(result)

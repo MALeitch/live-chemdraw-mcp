@@ -8,7 +8,8 @@ def register(mcp, bridge):
                                       reagents_text: str = "",
                                       format: str = "smiles",
                                       conditions_text: str = "",
-                                      anchor_y: float | None = None):
+                                      anchor_y: float | None = None,
+                                      yields: list | None = None):
         """Draw a reaction scheme: reactants + arrow + products, laid out
         left to right.
 
@@ -53,7 +54,13 @@ def register(mcp, bridge):
         reactants/products, or a long reagents/conditions string) can
         extend past the document's actual page even though it renders
         cleanly in the preview image, which auto-crops to whatever was
-        drawn rather than the page boundary."""
+        drawn rather than the page boundary.
+
+        yields: optional list parallel to products (one entry per
+        product). A number auto-formats as a percent ("92" -> "92%"); a
+        string is used as-is ("quant.", "85% (2 steps)"); None/omitted
+        means no caption for that product. Placed directly below each
+        product, checked in the same violations fields above."""
         return with_preview(bridge.make_reaction_scheme(
             reactants, products, reagents_text or None, format,
-            conditions_text or None, anchor_y))
+            conditions_text or None, anchor_y, yields))

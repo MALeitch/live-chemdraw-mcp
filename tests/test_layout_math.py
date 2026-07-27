@@ -2,9 +2,9 @@ import pytest
 
 from chemdraw_connector.domain.layout_math import (
     Box, arrow_length_for_reagents, caption_anchor, choose_columns,
-    distribute_vertical, find_overlaps, grid_positions, next_scheme_anchor_y,
-    page_overflow, page_width_points, plan_reaction_layout, shelf_pack,
-    stoichiometry_arrow_span,
+    distribute_vertical, find_overlaps, format_yield_text, grid_positions,
+    next_scheme_anchor_y, page_overflow, page_width_points,
+    plan_reaction_layout, shelf_pack, stoichiometry_arrow_span,
 )
 
 
@@ -61,6 +61,22 @@ def test_find_overlaps_detects_and_ignores():
     a, b, c = Box(0, 0, 50, 50), Box(40, 40, 90, 90), Box(200, 200, 250, 250)
     assert find_overlaps([a, b, c]) == [(0, 1)]
     assert find_overlaps([a, b, c], ids=["x", "y", "z"]) == [("x", "y")]
+
+
+def test_format_yield_text_number_becomes_percent():
+    assert format_yield_text(92) == "92%"
+    assert format_yield_text(85.5) == "85.5%"
+    assert format_yield_text(0) == "0%"  # a real (if unusual) yield, not "skip"
+
+
+def test_format_yield_text_string_passthrough():
+    assert format_yield_text("quant.") == "quant."
+    assert format_yield_text("85% (2 steps)") == "85% (2 steps)"
+
+
+def test_format_yield_text_falsy_skips():
+    assert format_yield_text(None) is None
+    assert format_yield_text("") is None
 
 
 def test_empty():

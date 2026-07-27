@@ -80,6 +80,19 @@ def caption_anchor(target_left, target_top, box, label_gap=12.0):
     return (target_left + box.width / 2.0, target_top + box.height + label_gap)
 
 
+def format_yield_text(value):
+    """Normalize a reaction-scheme yield value into caption text, or None
+    to skip captioning entirely. A bare number (int/float) is assumed to
+    be a percent and gets "%" appended; a string is used as-is so callers
+    can write "quant." or "85% (2 steps)" without it being mangled;
+    None/""/other falsy values mean "no caption for this product"."""
+    if not value and value != 0:
+        return None
+    if isinstance(value, (int, float)):
+        return f"{value:g}%"
+    return str(value)
+
+
 def find_overlaps(boxes, ids=None, tolerance=1.0):
     """Pairs of indices (or ids) whose boxes overlap by more than tolerance pt."""
     hits = []

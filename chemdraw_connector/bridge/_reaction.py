@@ -10,7 +10,7 @@ _POSITION_TOLERANCE = 0.5  # points; see the verify-and-correct step below
 class _Reaction:
     def make_reaction_scheme(self, reactants, products, reagents_text=None,
                              fmt="smiles", conditions_text=None,
-                             anchor_y=None):
+                             anchor_y=None, yields=None):
         """Insert -> plan -> move -> annotate, in that strict order (four
         separate passes, not interleaved). Confirmed live: an earlier
         version that inserted each structure and moved it immediately,
@@ -77,6 +77,17 @@ class _Reaction:
         same subscript-run/measure-real-width/verify-and-correct
         machinery described above, and the arrow's reserved space grows
         to fit whichever of the two is wider, not just reagents_text.
+
+        yields: optional list parallel to `products` (one entry per
+        product, matched by position; extra entries on either side are
+        ignored rather than raising). A number is auto-formatted as a
+        percent ("92" -> "92%"); a string is used as-is ("quant.", "85%
+        (2 steps)"); None/empty means no caption for that product. Placed
+        as a caption directly below each product (same
+        _add_caption_to_unit/caption_anchor primitives
+        chemdraw_build_scope_table uses for its per-entry labels), verified
+        and corrected the same way reagents_text/conditions_text are, and
+        included in the overlap/off-page/mislaid_captions checks below.
         """
         reactants = [self._validate_input(r, fmt) for r in reactants]
         products = [self._validate_input(p, fmt) for p in products]
@@ -446,6 +457,33 @@ class _Reaction:
                     mislaid.append("conditions_text")
                 decorations.append(("conditions_text", conditions_cap))
 
+            # Yield captions -- one per product group, positioned directly
+            # below that group (not the arrow), same primitives
+            # chemdraw_build_scope_table uses for per-entry labels
+            # (_add_caption_to_unit + layout_math.caption_anchor). zip()
+            # naturally truncates to the shorter of product_placed_groups/
+            # yields, so a mismatched-length yields list is never an error
+            # -- just fewer/no captions on the tail end.
+            if yields:
+                for i, (group, raw_yield) in enumerate(
+                        zip(product_placed_groups, yields)):
+                    text = layout_math.format_yield_text(raw_yield)
+                    if text is None:
+                        continue
+                    box = layout_math.Box(
+                        min(u.Left for u in group), min(u.Top for u in group),
+                        max(u.Right for u in group), max(u.Bottom for u in group))
+                    cx, cy = layout_math.caption_anchor(box.left, box.top, box)
+                    cap = self._add_caption_to_unit(doc, group[0], text, cx, cy)
+                    try:
+                        cap_w = cap.Right - cap.Left
+                    except Exception:
+                        cap_w = 0.0
+                    label = f"yield[{i}]"
+                    if not _place_and_verify(cap, cx - cap_w / 2.0, cy):
+                        mislaid.append(label)
+                    decorations.append((label, cap))
+
             # Verify the whole scheme, not just trust the layout math: read
             # every placed element's FINAL bounds (structures, arrow, every
             # caption) and flag any pair that actually overlaps, rather than
@@ -480,3 +518,40 @@ class _Reaction:
                 "preview_png_base64": self._preview_png(doc),
             }
         return self._run(go, timeout=SLOW_TIMEOUT)
+
+    def make_reaction_route(self, steps):
+        """Draw a multi-step reaction route: one make_reaction_scheme call
+        per step, auto-stacked top to bottom (anchor_y always omitted, see
+        make_reaction_scheme's own docstring on why that's already free).
+
+        Not itself wrapped in self._run -- composes make_reaction_scheme/
+        check_warnings/find_duplicates, each already its own worker
+        submission (same composition-above-go() shape as import_molfile/
+        convert_cdx_cdxml).
+
+        A compound that reappears across steps (one step's product is the
+        next step's reactant) is just given the same SMILES again in both
+        steps -- matches how published multi-step schemes are actually
+        drawn (each step visually self-contained), so find_duplicates
+        correctly flagging that repeat at the end is EXPECTED, not a bug.
+
+        Each step is isolated: one step's failure (bad SMILES, missing
+        reactants/products key, etc.) is caught and reported in `failed`
+        without stopping the rest of the route -- same per-item isolation
+        convention as edit_atoms/edit_bonds/the shorthand batch tools."""
+        results, failed = [], []
+        for i, step in enumerate(steps):
+            try:
+                r = self.make_reaction_scheme(
+                    step["reactants"], step["products"],
+                    step.get("reagents_text"), step.get("format", "smiles"),
+                    step.get("conditions_text"), yields=step.get("yields"))
+                r["warnings"] = self.check_warnings(r["object_ids"])
+                results.append({"step_index": i, **r})
+            except Exception as exc:
+                failed.append({"step_index": i, "error": str(exc)})
+        return {
+            "steps": results,
+            "failed": failed,
+            "duplicate_groups": self.find_duplicates("document"),
+        }
