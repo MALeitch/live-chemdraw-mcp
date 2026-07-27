@@ -249,6 +249,67 @@ class _DocumentSession:
             return entry
         return self._run(go, timeout=SLOW_TIMEOUT)
 
+    def convert_cdx_cdxml(self, input_path, output_path, overwrite=False):
+        """Convert a file between .cdx/.cdxml (or any other ChemDraw-
+        readable/writable format) by opening it and SaveAs-ing under a
+        different extension -- ChemDraw's own SaveAs infers format from the
+        extension, same as save_document. Not itself wrapped in self._run --
+        composes open_document/save_document/close_document/
+        set_active_document, each already its own worker submission (same
+        composition-above-go() shape as import_molfile).
+
+        Deliberately does not just call open_document+save_document back to
+        back: doing so would leave a stray background document open (like
+        every other throwaway document, Document.Close() is a no-op over
+        COM) and would silently leave the USER'S previously-active document
+        no longer active. Detects whether input_path was already an open
+        document before this call (the user's own file, or a leftover from
+        an earlier call) -- if so, doesn't close it (not ours to close),
+        only restores the previously-active document afterward. If
+        input_path was already the active document itself, this behaves
+        exactly like save_document(output_path) on it directly (its window
+        now points at output_path) -- there's nothing to restore."""
+        if not os.path.exists(input_path):
+            raise InvalidInputError(
+                f"No file found at {input_path!r}. Check the path and "
+                "retry -- it must point to an existing ChemDraw-readable "
+                "file (.cdx/.cdxml/.mol/...)."
+            )
+        before = self.list_documents()
+        documents_before = set(before["documents"])
+        prev_active = before["active"]
+
+        opened = self.open_document(input_path)
+        bg_name = opened["active_document"]
+        newly_opened = bg_name not in documents_before
+
+        saved = self.save_document(output_path, overwrite)
+        current_name = self.list_documents()["active"]
+
+        # Document names can legitimately be "" (an untitled document,
+        # confirmed live) -- these must be `is not None` checks, not
+        # truthiness checks, or a real empty-named document gets silently
+        # treated the same as "no document"/"nothing to restore".
+        if newly_opened and current_name is not None:
+            # Our own throwaway -- clean it up now that it's been written
+            # out, same "don't leave stray windows behind" discipline as
+            # use_scratch_document/import_molfile.
+            self.close_document(current_name, discard_changes=True)
+
+        restored = None
+        if prev_active is not None and prev_active not in (bg_name, current_name):
+            if prev_active in set(self.list_documents()["documents"]):
+                self.set_active_document(prev_active)
+                restored = prev_active
+
+        return {
+            "input_path": input_path,
+            "output_path": saved["path"],
+            "bytes": os.path.getsize(saved["path"]),
+            "reused_existing_document": not newly_opened,
+            "restored_active_document": restored,
+        }
+
     def open_document(self, path):
         def go():
             # An LLM client constructs this path, not a careful human typing

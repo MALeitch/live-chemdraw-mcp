@@ -1,12 +1,14 @@
 """Structure insertion/export: SMILES/name/molfile/etc in, image/text/
 clipboard out."""
 import base64
+import os
 
-from .. import targets
+from .. import snapshots, targets
 from ..com import nudge
 from ..com import types as t
 from ..domain import layout_math
-from ..errors import ChemDrawError
+from ..domain import sdf as sdf_domain
+from ..errors import ChemDrawError, InvalidInputError
 from ._plumbing import SLOW_TIMEOUT, _com_bytes, _com_text
 
 
@@ -98,6 +100,86 @@ class _StructureIO:
                 })
             return {"format": fmt, "structures": out}
         return self._run(go, timeout=SLOW_TIMEOUT)
+
+    def export_cdxml(self, path, target="document", overwrite=False):
+        def go():
+            doc = self._doc()
+            if target == "document":
+                # Whole-document GetData("text/xml") -- the same call
+                # write_backup_file already uses for backups, a complete,
+                # valid CDXML page (header/colortable/fonttable included),
+                # unlike export_structure(format="cdxml")'s per-unit
+                # fragments from targets.resolve().
+                text = snapshots.export_cdxml_text(doc)
+            elif target == "selection":
+                data = doc.Selection.Objects.GetData("text/xml")
+                text = _com_text(data) if data else None
+            else:
+                raise InvalidInputError(
+                    f"target must be 'document' or 'selection', got "
+                    f"{target!r}"
+                )
+            if not text:
+                raise ChemDrawError(
+                    "ChemDraw returned no CDXML data" +
+                    (" -- nothing is currently selected." if target == "selection" else "."))
+            self._guard_write_path(path, overwrite)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return {"path": path, "bytes": len(text.encode("utf-8")),
+                    "target": target}
+        return self._run(go, timeout=SLOW_TIMEOUT)
+
+    def import_molfile(self, path, target="scratch"):
+        """Insert every record from a .mol/.sdf file. Not itself wrapped in
+        self._run -- composes use_scratch_document/insert_structure, each
+        already its own worker submission (same composition-above-go()
+        pattern tools/procedure_scope.py uses at the tool layer, just done
+        here at the bridge layer instead)."""
+        if not os.path.exists(path):
+            raise InvalidInputError(
+                f"No file found at {path!r}. Check the path and retry -- "
+                "it must point to an existing .mol/.sdf file."
+            )
+        if not os.path.isfile(path):
+            raise InvalidInputError(
+                f"{path!r} exists but is not a file (e.g. a directory). "
+                "Pass the path to the molfile/SDF itself."
+            )
+        if target not in ("scratch", "current"):
+            raise InvalidInputError(
+                f"target must be 'scratch' or 'current', got {target!r}"
+            )
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".sdf":
+            records = sdf_domain.split_sdf_records(text)
+        else:
+            records = [text] if text.strip() else []
+        if not records:
+            raise InvalidInputError(
+                f"No molecule records found in {path!r} (empty file, or "
+                "an .sdf with no $$$$-terminated records)."
+            )
+
+        if target == "scratch":
+            self.use_scratch_document()
+
+        inserted, failed = [], []
+        for i, record in enumerate(records):
+            try:
+                result = self.insert_structure(record, "molfile")
+                inserted.append({"record_index": i, **result})
+            except Exception as exc:
+                failed.append({"record_index": i, "error": str(exc)})
+        return {
+            "path": path,
+            "record_count": len(records),
+            "inserted_count": len(inserted),
+            "inserted": inserted,
+            "failed": failed,
+        }
 
     def export_image(self, fmt="png", target="selection", path=None, dpi=300,
                      overwrite=False):

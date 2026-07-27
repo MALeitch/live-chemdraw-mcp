@@ -90,6 +90,22 @@ def register(mcp, bridge):
         (path omitted, or path == its current file) never needs this."""
         return as_json(bridge.save_document(path or None, overwrite))
 
+    @mcp.tool(description=(
+        "Convert a ChemDraw file between .cdx and .cdxml (or any other "
+        "ChemDraw-readable/writable format) by extension — ChemDraw's own "
+        "SaveAs infers the format from output_path's extension, same as "
+        "chemdraw_save_document. Opens input_path in the background, saves "
+        "it as output_path, then closes that background document and "
+        "restores whichever document was active before this call — it "
+        "will not disturb a document you already had open, unless "
+        "input_path was ITSELF that already-open document (then its "
+        "window now points at output_path, exactly like calling "
+        "chemdraw_save_document on it directly — nothing to restore). "
+        "Refuses to overwrite an existing output_path unless overwrite=true."))
+    def chemdraw_convert_cdx_cdxml(input_path: str, output_path: str,
+                                   overwrite: bool = False) -> str:
+        return as_json(bridge.convert_cdx_cdxml(input_path, output_path, overwrite))
+
     @mcp.tool()
     def chemdraw_undo() -> str:
         """Undo the last operation the USER performed by hand in ChemDraw.
@@ -179,11 +195,39 @@ def register(mcp, bridge):
         return as_json(bridge.insert_structure(representation, format, pos))
 
     @mcp.tool(description=(
+        "Insert every structure from a .mol or .sdf file. A .sdf with "
+        "multiple $$$$-terminated records inserts each one (data fields "
+        "after each record's connection table are ignored — only the "
+        "molfile block itself is used); a .mol is a single record. Each "
+        "record is inserted independently — one malformed record is "
+        "reported in `failed` without aborting the rest, same isolation as "
+        "chemdraw_edit_atoms/chemdraw_edit_bonds. target='scratch' "
+        "(default) clears and reuses the shared scratch document first "
+        "(see chemdraw_use_scratch_document); target='current' inserts "
+        "into whatever document is already active. ChemDraw does not "
+        "auto-arrange multiple records — follow up with "
+        "chemdraw_arrange_grid if you imported more than one and want "
+        "them laid out."))
+    def chemdraw_import_molfile(path: str, target: str = "scratch") -> str:
+        return as_json(bridge.import_molfile(path, target))
+
+    @mcp.tool(description=(
         "Export structures as text. format: smiles | molfile | inchi | "
         "inchikey | cdxml | cml | helm. " + TARGET_DOC))
     def chemdraw_export_structure(format: str = "molfile",
                                   target: str = "selection") -> str:
         return as_json(bridge.export_structure(format, _parse(target)))
+
+    @mcp.tool(description=(
+        "Export CDXML text to a file. Unlike chemdraw_save_document(path="
+        "'*.cdxml'), this does NOT change the active document's associated "
+        "file / mark it saved-to-that-path — it's a side-channel snapshot, "
+        "and target can be 'selection' (only the current selection) as "
+        "well as 'document' (the whole page). Refuses to overwrite an "
+        "existing file unless overwrite=true."))
+    def chemdraw_export_cdxml(path: str, target: str = "document",
+                              overwrite: bool = False) -> str:
+        return as_json(bridge.export_cdxml(path, target, overwrite))
 
     @mcp.tool(description=(
         "Render structures to an image. format: png | svg | emf. With path, "
