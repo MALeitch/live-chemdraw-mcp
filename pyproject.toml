@@ -9,6 +9,7 @@ dependencies = [
     "pywin32>=310",
     "rdkit>=2024.3",
     "mcp[cli]>=1.2",
+    "olefile>=0.47",
 ]
 
 [dependency-groups]

@@ -5,6 +5,7 @@ from . import (
     layout,
     naming,
     offline_parse,
+    office_embed,
     procedure_characterization,
     procedure_qc,
     procedure_reaction,
@@ -22,7 +23,8 @@ from . import (
 _MODULES = (structure, state, analysis, stereo, shorthand, layout, style,
             reaction, enumeration, annotations, specialty_objects,
             stoichiometry, procedure_reaction, procedure_scope,
-            procedure_characterization, procedure_qc, naming, offline_parse)
+            procedure_characterization, procedure_qc, naming, offline_parse,
+            office_embed)
 
 
 def register_all(mcp, bridge):
