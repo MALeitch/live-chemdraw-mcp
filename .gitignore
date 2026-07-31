@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 *.egg-info/
+
+# Internal development docs -- kept locally, not shipped in the public repo.
+/DEBUG_REPORT.md
+/ROADMAP.md
