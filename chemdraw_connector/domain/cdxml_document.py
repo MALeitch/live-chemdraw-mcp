@@ -1,5 +1,5 @@
 """CDXML -> semantic document JSON, entirely offline (no COM, no live
-ChemDraw). ROADMAP #7.
+ChemDraw).
 
 Reads an arbitrary .cdxml file's structures/captions/arrows/brackets/
 reactions into the SAME plain-dict shape state.build_snapshot/
@@ -14,16 +14,15 @@ Structures drawn via ChemDraw's own reaction-scheme tooling
 (<scheme><step ReactionStepReactants="10 17" ReactionStepProducts="25"
 ReactionStepArrows="48" .../></scheme> -- ReactionStepArrows points at
 the legacy SupersededBy graphic's own id, not the real <arrow>'s id (see
-the SupersededBy-alias handling below, DEBUG_REPORT.md H-1); confirmed
-live from this connector's own chemdraw_make_reaction_scheme output) are
-reported under `reactions`, resolved by native CDX id, not spatial
-guessing. A loose hand-drawn arrow with no <scheme> wrapper is still
-parsed as a structure/arrow, just not grouped into a reaction -- no
-spatial "arrow position vs structure position" fallback heuristic (see
-ROADMAP.md #7's notes).
+the SupersededBy-alias handling below); confirmed live from this
+connector's own chemdraw_make_reaction_scheme output) are reported under
+`reactions`, resolved by native CDX id, not spatial guessing. A loose
+hand-drawn arrow with no <scheme> wrapper is still parsed as a
+structure/arrow, just not grouped into a reaction -- no spatial "arrow
+position vs structure position" fallback heuristic.
 
-CONFIRMED LIVE (DEBUG_REPORT.md M-3, 2026-07-30) that this does NOT mean
-every `reactions` entry describes a real reaction: ChemDraw can ALSO wrap
+CONFIRMED LIVE that this does NOT mean every `reactions` entry describes
+a real reaction: ChemDraw can ALSO wrap
 a completely unrelated loose arrow (e.g. one made with
 chemdraw_make_arrow, positioned nowhere near the structure it ends up
 paired with) in its own native <scheme><step>, unprompted. `reactions`
@@ -255,22 +254,19 @@ def parse_document(cdxml_text):
     page_bounds), plus `reactions` and `arrows`/`brackets` (native-only
     concepts with no live-path equivalent to reuse).
 
-    Walks EVERY <page> element, not just the first (DEBUG_REPORT.md L-2,
-    fixed 2026-07-31): content on a second/subsequent <page> used to be
-    silently dropped. Reachability of a genuinely multi-<page> CDXML
-    export was NOT confirmed -- every real ChemDraw export checked
-    (session captures, ~40 real connector backups including genuine user
-    documents) has exactly one <page>, expressing extent via
+    Walks EVERY <page> element, not just the first: content on a
+    second/subsequent <page> used to be silently dropped. Reachability
+    of a genuinely multi-<page> CDXML export was NOT confirmed -- every
+    real ChemDraw export checked (~40 real connector backups including
+    genuine user documents) has exactly one <page>, expressing extent via
     HeightPages/WidthPages tiling attributes on that single page rather
     than sibling <page> elements. `page_bounds`/`violations.off_page`
     still come from the FIRST page only -- canvas.build_canvas has no
     multi-page concept, and there is no real multi-page export to
-    validate a design against (guessing at one would repeat exactly the
-    fixture-encodes-the-author's-assumption mistake this audit found
-    elsewhere, e.g. known bug patterns #2/#5). `extra_pages` reports how
-    many additional <page> elements were found beyond the first, so a
-    caller can tell when this limitation might actually matter, instead
-    of the previous silent content loss."""
+    validate a design against, so this doesn't guess at one.
+    `extra_pages` reports how many additional <page> elements were found
+    beyond the first, so a caller can tell when this limitation might
+    actually matter, instead of the previous silent content loss."""
     root = ET.fromstring(cdxml_text)
     pages = root.findall(".//page")
     if not pages:
@@ -334,9 +330,9 @@ def parse_document(cdxml_text):
             # check it was silently picked up as a fake zero-height "box"
             # sitting exactly on top of the real arrow.
             #
-            # CONFIRMED LIVE (2026-07-30, DEBUG_REPORT.md H-1): a
-            # <scheme><step ReactionStepArrows="..."> reference points at
-            # THIS legacy graphic's own id, not the real <arrow>'s id --
+            # CONFIRMED LIVE: a <scheme><step ReactionStepArrows="...">
+            # reference points at THIS legacy graphic's own id, not the
+            # real <arrow>'s id --
             # so without an alias, every reaction's arrow_ids came back
             # empty and the id landed in unresolved_ids on every healthy
             # file. Alias this graphic's native id to whatever our-id the
@@ -372,7 +368,7 @@ def parse_document(cdxml_text):
             # panel-box rectangle uses (no live tool in this connector
             # creates one to test against, unlike brackets/arrows) --
             # everything that isn't a Bracket is treated as a candidate
-            # box for now. See ROADMAP.md #7's notes.
+            # box for now.
             box_index += 1
             boxes.append({"index": box_index, "bounds": bounds})
 

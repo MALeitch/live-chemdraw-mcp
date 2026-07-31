@@ -92,13 +92,14 @@ python -m venv .venv
 .venv\Scripts\python -m pip install pywin32 rdkit "mcp[cli]" pytest
 ```
 
-Register in `%APPDATA%\Claude\claude_desktop_config.json`:
+Register in `%APPDATA%\Claude\claude_desktop_config.json` (replace
+`C:\\path\\to\\chemdraw-mcp` with wherever you cloned it):
 
 ```json
 "mcpServers": {
   "chemdraw": {
-    "command": "C:\\Users\\USER\\chemdraw-mcp\\.venv\\Scripts\\python.exe",
-    "args": ["C:\\Users\\USER\\chemdraw-mcp\\server.py"]
+    "command": "C:\\path\\to\\chemdraw-mcp\\.venv\\Scripts\\python.exe",
+    "args": ["C:\\path\\to\\chemdraw-mcp\\server.py"]
   }
 }
 ```

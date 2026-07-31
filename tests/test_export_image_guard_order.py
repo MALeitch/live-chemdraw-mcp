@@ -1,13 +1,12 @@
 """export_image's write-guard ordering -- pure, no COM.
 
-Regression for DEBUG_REPORT.md L-1 (2026-07-30, fixed 2026-07-31): the
-overwrite guard used to run AFTER the multi-id-target branch mutated the
-live document's selection (doc.Objects.Unselect() + setting .Selected on
-each unit) and after the expensive GetData render -- so a call the guard
-went on to refuse had already replaced whatever the user had selected in
-ChemDraw, a mutation performed by a call that reports failure. Fixed by
-hoisting the guard to the top of go(), before doc.Objects/targets.resolve
-are touched at all.
+Regression test. The overwrite guard used to run AFTER the
+multi-id-target branch mutated the live document's selection
+(doc.Objects.Unselect() + setting .Selected on each unit) and after the
+expensive GetData render -- so a call the guard went on to refuse had
+already replaced whatever the user had selected in ChemDraw, a mutation
+performed by a call that reports failure. Fixed by hoisting the guard to
+the top of go(), before doc.Objects/targets.resolve are touched at all.
 """
 import pytest
 

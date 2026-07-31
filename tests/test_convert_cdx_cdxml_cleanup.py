@@ -1,8 +1,8 @@
 """convert_cdx_cdxml's own orchestration logic -- pure, no COM/win32.
 
-Regression for DEBUG_REPORT.md H-2 (2026-07-30, fixed 2026-07-31):
-CONFIRMED LIVE that a failed save_document() call inside convert_cdx_cdxml
-(most commonly the overwrite=False guard correctly refusing a pre-existing
+Regression test. CONFIRMED LIVE that a failed save_document() call
+inside convert_cdx_cdxml (most commonly the overwrite=False guard
+correctly refusing a pre-existing
 output_path -- the single most likely reason this ever raises) used to
 leave the newly-opened background document permanently orphaned
 (Document.Close() is a no-op over COM, so there was no way to close it

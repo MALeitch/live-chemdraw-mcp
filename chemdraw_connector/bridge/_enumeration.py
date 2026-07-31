@@ -76,8 +76,7 @@ class _Enumeration:
         for export_data_table, where `path` is always an explicit,
         LLM-constructed argument with no "connector's own default
         location" concept; export_canvas_table passes True only when
-        writing to ITS OWN well-known default path. FIXED
-        (DEBUG_REPORT.md M-4, 2026-07-31): this used to
+        writing to ITS OWN well-known default path. FIXED: this used to
         os.makedirs(exist_ok=True) unconditionally for every path
         (a plain existence check, not the shared _guard_write_path
         helper, on the mistaken belief that the default-path exemption

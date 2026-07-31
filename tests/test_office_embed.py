@@ -343,9 +343,9 @@ def test_xlsx_sheet_name_and_anchor_cell_resolved(tmp_path):
 
 
 def test_xlsx_absolute_anchor_reports_null_cell_without_stealing_fallback_pairing(tmp_path):
-    # Regression for DEBUG_REPORT.md M-5 (2026-07-30, fixed 2026-07-31):
-    # xdr:absoluteAnchor was collected by neither findall, so its
-    # embedding's relationship id stayed an unresolved "leftover" -- which
+    # Regression test. xdr:absoluteAnchor was collected by neither
+    # findall, so its embedding's relationship id stayed an unresolved
+    # "leftover" -- which
     # could wrongly absorb an UNRELATED unmatched cell via the
     # single-leftover pairing fallback (see
     # office_embed._xlsx_drawing_ole_anchors's own docstring on that

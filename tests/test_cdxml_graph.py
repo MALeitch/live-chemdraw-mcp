@@ -84,7 +84,7 @@ def test_num_hydrogens_present_vs_absent():
 
 
 def test_parse_element_matches_parse_on_same_content():
-    # ROADMAP #7 (domain/cdxml_document.py) calls parse_element directly
+    # domain/cdxml_document.py calls parse_element directly
     # on an already-parsed <fragment>/<group> Element (one of several
     # structures on a page it parsed itself), not on raw text -- confirms
     # the refactor is behavior-preserving.

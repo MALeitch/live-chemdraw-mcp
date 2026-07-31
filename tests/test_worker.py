@@ -46,10 +46,10 @@ def test_unrecoverable_block_raises_and_wedges():
     with pytest.raises(ChemDrawBlockedError) as first:
         w.submit(blocked, timeout=0.2)
     assert w._wedged.is_set()
-    # Regression for DEBUG_REPORT.md M-1 (2026-07-30, fixed 2026-07-31):
-    # blocked() is STILL RUNNING on the worker thread at this point (it
-    # was never cancelled -- Future can't interrupt an in-flight
-    # callable) and could still complete or mutate the document later.
+    # Regression test. blocked() is STILL RUNNING on the worker thread at
+    # this point (it was never cancelled -- Future can't interrupt an
+    # in-flight callable) and could still complete or mutate the document
+    # later.
     # The error must say so, not just report "blocked" as if nothing is
     # happening.
     assert "still be running" in str(first.value)

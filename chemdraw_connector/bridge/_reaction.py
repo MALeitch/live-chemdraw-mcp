@@ -540,7 +540,7 @@ class _Reaction:
         without stopping the rest of the route -- same per-item isolation
         convention as edit_atoms/edit_bonds/the shorthand batch tools.
 
-        FIXED (DEBUG_REPORT.md M-2, 2026-07-31): the QC call
+        FIXED: the QC call
         (check_warnings) used to run INSIDE the same try as the mutation
         (make_reaction_scheme), so a step whose structures/arrow/captions
         drew successfully but whose follow-up check_warnings call happened

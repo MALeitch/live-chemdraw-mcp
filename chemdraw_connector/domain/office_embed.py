@@ -14,8 +14,8 @@ validity there. That is also why an unparsable individual OLE blob is
 silently skipped here rather than raising: this function's contract is
 "best-effort find what's on disk", not "confirm it's usable".
 
-Ground truth below was verified live (this session, against real files
-ChemDraw actually produced) unless flagged otherwise:
+Ground truth below was verified live, against real files ChemDraw
+actually produced, unless flagged otherwise:
 
 PPTX (verified against a real 10-embedding presentation):
   - `ppt/presentation.xml`'s <p:sldIdLst> lists <p:sldId r:id="rIdN"/> in
@@ -43,14 +43,23 @@ XLSX (verified against a real embedding, including its exact anchor cell):
     row number, per A1 notation. If a cell can't be confidently resolved,
     "cell" is None rather than guessed.
 
-DOCX (NOT live-verified this session -- standard OOXML convention, medium
-confidence only):
+DOCX (verified against a real Word-produced .docx with a genuine
+ChemDraw embedding -- `<Application>Microsoft Office Word</Application>`
+in docProps/app.xml, ProgID="ChemDraw_x64.Document.6.0"):
   - Single `word/_rels/document.xml.rels` maps r:ids straight to
     `embeddings/oleObjectN.bin` (no per-page indirection, unlike pptx).
   - `word/document.xml` body is walked in document order; each oleObject
     reference encountered gets a 1-based ordinal `index`. Word computes
     pagination at render time, not in the raw XML, so no page number is
     ever invented here.
+  - The real file nests the reference four levels deep
+    (`w:body -> w:p -> w:r -> w:object -> o:OLEObject`), inside a VML
+    `v:shape` sibling -- the recursive `root.iter()` walk handles this
+    regardless of depth. Word also emits a companion
+    `<v:imagedata r:id="rIdN"/>` (the EMF preview) right next to the real
+    OLE reference; filtering by relationship `Type` rather than mere
+    `r:id` presence correctly skips it instead of double-counting the
+    embedding.
 
 Zero COM imports; pure zip/XML/OLE parsing.
 """
@@ -355,8 +364,8 @@ def _xlsx_drawing_ole_anchors(zf, drawing_path, ole_rel_ids):
     xdr:absoluteAnchor -- the third OOXML anchor type, used when a shape
     is positioned by absolute EMU offset (<xdr:pos>) rather than anchored
     to a cell -- is collected here too (NOT reproduced live, static
-    reasoning only per DEBUG_REPORT.md M-5: no absolutely-anchored
-    ChemDraw embedding was available to test against). It genuinely has
+    reasoning only: no absolutely-anchored ChemDraw embedding was
+    available to test against). It genuinely has
     no <xdr:from> and therefore no cell to report -- "cell": None is the
     correct answer for it, not a gap. What WAS a gap: without collecting
     its r:id at all, its embedding's relationship id stayed a "remaining"

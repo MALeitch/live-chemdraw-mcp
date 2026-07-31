@@ -188,13 +188,12 @@ class _StructureIO:
             if path:
                 # Validate the write target FIRST -- before touching the
                 # document's selection or paying for GetData's render.
-                # FIXED (DEBUG_REPORT.md L-1, 2026-07-31): this guard used
-                # to run AFTER the multi-id-target branch below mutated
-                # the live document's selection (doc.Objects.Unselect() +
-                # setting .Selected on each unit), so a call the guard
-                # went on to refuse had already replaced whatever the
-                # user had selected in ChemDraw -- a mutation from a call
-                # that reports failure.
+                # FIXED: this guard used to run AFTER the multi-id-target
+                # branch below mutated the live document's selection
+                # (doc.Objects.Unselect() + setting .Selected on each
+                # unit), so a call the guard went on to refuse had
+                # already replaced whatever the user had selected in
+                # ChemDraw -- a mutation from a call that reports failure.
                 self._guard_write_path(path, overwrite)
             mime = t.mime_for(fmt)
             if target == "document":

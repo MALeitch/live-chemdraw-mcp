@@ -1,7 +1,6 @@
 """make_reaction_route's step isolation -- pure, no COM.
 
-Regression for DEBUG_REPORT.md M-2 (2026-07-30, fixed 2026-07-31):
-CONFIRMED BY STATIC REASONING (the report's own repro note) that the
+Regression test. CONFIRMED BY STATIC REASONING that the
 per-item try used to wrap BOTH the mutation (make_reaction_scheme) and the
 follow-up QC call (check_warnings) -- so a step that drew successfully but
 whose check_warnings call happened to raise was reported in `failed`

@@ -1,8 +1,8 @@
 """_write_csv_rows / export_data_table -- pure, no COM.
 
-Regression for DEBUG_REPORT.md M-4 (2026-07-30, fixed 2026-07-31):
-_write_csv_rows used to os.makedirs(exist_ok=True) unconditionally for
-every path, including an explicit/LLM-constructed one -- silently
+Regression test. _write_csv_rows used to os.makedirs(exist_ok=True)
+unconditionally for every path, including an explicit/LLM-constructed
+one -- silently
 materializing a directory tree instead of the actionable
 "containing directory does not exist" error every sibling write guard
 (_guard_write_path/_guard_save_path) gives. Now routes through the shared

@@ -272,8 +272,8 @@ class _Plumbing:
         discipline as snapshots.write_backup_file's own
         os.makedirs(exist_ok=True)) — never for an explicit/custom path,
         which is exactly the "LLM-constructed path" case this guard
-        exists to protect. See DEBUG_REPORT.md M-4: _write_csv_rows used
-        to os.makedirs(exist_ok=True) unconditionally for EVERY path,
+        exists to protect. _write_csv_rows used to
+        os.makedirs(exist_ok=True) unconditionally for EVERY path,
         including an explicit custom one, silently creating a directory
         tree instead of the actionable error this default gives."""
         parent = os.path.dirname(path)

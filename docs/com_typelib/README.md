@@ -33,11 +33,13 @@ yet implemented** here.
 First captured **2026-07-21** against **ChemDraw Professional 26.0.0.6141**
 (the same build the main README's "Built and validated against" line
 references), while investigating what COM capabilities exist but are unused
-in this connector. See
-`C:\Users\USER\.claude\plans\1-save-the-com-fuzzy-hopper.md` for the
-resulting phased implementation plan (mechanism/reaction arrows, atom isotope
-labeling, reaction symbols, polymer brackets, TLC plates, native
-stoichiometry grids, enhanced-stereo flags, Markush/alt-groups).
+in this connector. That investigation became a phased implementation plan
+covering mechanism/reaction arrows, atom isotope labeling, reaction symbols,
+polymer brackets, TLC plates, native stoichiometry grids, enhanced-stereo
+flags, and Markush/alt-groups — most of these are now implemented (see
+`README.md`'s Capabilities section for current status; anything not listed
+there is still tracked as not-yet-implemented COM surface, per this
+folder's own purpose above).
 
 ## Regenerating
 

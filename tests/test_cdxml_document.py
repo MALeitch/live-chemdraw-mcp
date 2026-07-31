@@ -1,5 +1,5 @@
-"""domain/cdxml_document.py -- offline CDXML -> semantic JSON (ROADMAP
-#7). Pure, no COM. Fixtures below are compact hand-built snippets, but
+"""domain/cdxml_document.py -- offline CDXML -> semantic JSON.
+Pure, no COM. Fixtures below are compact hand-built snippets, but
 every tag/attribute shape they use (native <arrow>, <scheme><step
 ReactionStepReactants=...>, <graphic GraphicType="Bracket">, a legacy
 <graphic SupersededBy="..."> duplicate of the real arrow, a caption's
@@ -18,13 +18,12 @@ from chemdraw_connector.domain import cdxml_document
 # from `boxes` rather than picked up as a fake box.
 #
 # ReactionStepArrows="52" (the GRAPHIC's own id), not "51" (the real
-# arrow's id) -- confirmed live (DEBUG_REPORT.md H-1, 2026-07-30) that
-# ChemDraw's own <scheme><step> element cross-references the legacy
-# compatibility graphic, not the <arrow> it supersedes. An earlier version
-# of this fixture had this backwards (wired to "51", the sensible-looking
-# assumption) and its own test asserted the resulting false resolution as
-# correct -- exactly known bug pattern #5 (a hand-built fixture encoding
-# the author's assumption, not reality) from HANDOFF.md.
+# arrow's id) -- confirmed live that ChemDraw's own <scheme><step>
+# element cross-references the legacy compatibility graphic, not the
+# <arrow> it supersedes. An earlier version of this fixture had this
+# backwards (wired to "51", the sensible-looking assumption) and its own
+# test asserted the resulting false resolution as correct -- a hand-built
+# fixture encoding the author's assumption rather than reality.
 REACTION_CDXML = """<?xml version="1.0" ?>
 <CDXML>
  <page id="1" BoundingBox="0 0 540 720">
@@ -94,7 +93,8 @@ def test_legacy_superseded_arrow_graphic_excluded_from_boxes():
 def test_reaction_step_resolves_reactants_products_arrow_and_text():
     # arrow_ids == ["cdx-51"] via the SupersededBy alias, even though the
     # <step> element itself references "52" (the graphic), not "51" (the
-    # arrow) -- see DEBUG_REPORT.md H-1 fix in cdxml_document.parse_document.
+    # arrow) -- see the SupersededBy-alias fix in
+    # cdxml_document.parse_document.
     result = cdxml_document.parse_document(REACTION_CDXML)
     assert len(result["reactions"]) == 1
     step = result["reactions"][0]
@@ -110,9 +110,8 @@ def test_reaction_step_resolves_reactants_products_arrow_and_text():
 # reaction_scheme(["CC(=O)Cl","c1ccccc1O"], ["CC(=O)Oc1ccccc1"],
 # reagents_text="pyridine", conditions_text="DCM, 0 °C, 2 h") then
 # chemdraw_export_cdxml), trimmed to the elements that matter for arrow
-# resolution -- the same live capture DEBUG_REPORT.md's H-1 repro used.
-# Independent of REACTION_CDXML above (which was hand-built and then
-# corrected once this bug was found) -- this one was never wrong.
+# resolution. Independent of REACTION_CDXML above (which was hand-built
+# and then corrected once this bug was found) -- this one was never wrong.
 REAL_ARROW_ALIAS_CDXML = """<?xml version="1.0" ?>
 <CDXML><page id="1" BoundingBox="0 0 540 719.75">
  <fragment id="10" BoundingBox="60 104.92 90.92 135.08"><n id="1" Element="6"/></fragment>
@@ -207,9 +206,9 @@ SALT_CDXML = """<?xml version="1.0" ?>
 """
 
 
-# Regression for DEBUG_REPORT.md L-2 (2026-07-30, fixed 2026-07-31):
-# parse_document used to resolve only the FIRST <page> (root.find(".//page")),
-# silently dropping content from any subsequent <page>. Reachability of a
+# Regression: parse_document used to resolve only the FIRST <page>
+# (root.find(".//page")), silently dropping content from any subsequent
+# <page>. Reachability of a
 # genuinely multi-<page> CDXML export was never confirmed (every real
 # export checked has exactly one <page>) -- this fixture is a synthetic
 # construction to exercise the parser's own multi-page handling, not a
@@ -286,8 +285,7 @@ RADICAL_CDXML = """<?xml version="1.0" ?>
 
 
 def test_radical_atom_uses_chemdraws_own_hydrogen_count_not_default_valence():
-    # Regression for the CRITICAL finding in DEBUG_REPORT.md (2026-07-30):
-    # _compute_formula used to let RDKit's sanitizer fill implicit
+    # Regression: _compute_formula used to let RDKit's sanitizer fill implicit
     # hydrogens from default valence, ignoring the CDXML's own
     # NumHydrogens attribute entirely -- correct for the vast majority of
     # atoms (which carry no such attribute and rely on default valence,

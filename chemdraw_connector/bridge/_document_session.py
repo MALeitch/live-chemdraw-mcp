@@ -273,14 +273,14 @@ class _DocumentSession:
         The save is wrapped so a FAILED save (most commonly
         save_document's own overwrite=False guard refusing a pre-existing
         output_path -- the single most likely reason this ever raises)
-        still leaves things clean: CONFIRMED LIVE (DEBUG_REPORT.md H-2,
-        2026-07-30) that without this, a plain, correctly-refused
-        overwrite=False call permanently orphaned the newly-opened
-        background document (Document.Close() is a no-op over COM, so
-        there was no way to close it after the fact either) AND silently
-        left it as the active document -- so every subsequent tool call
-        silently operated on the wrong document until the user noticed and
-        manually closed the stray window."""
+        still leaves things clean: CONFIRMED LIVE that without this, a
+        plain, correctly-refused overwrite=False call permanently
+        orphaned the newly-opened background document (Document.Close()
+        is a no-op over COM, so there was no way to close it after the
+        fact either) AND silently left it as the active document -- so
+        every subsequent tool call silently operated on the wrong
+        document until the user noticed and manually closed the stray
+        window."""
         if not os.path.exists(input_path):
             raise InvalidInputError(
                 f"No file found at {input_path!r}. Check the path and "
