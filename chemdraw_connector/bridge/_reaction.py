@@ -300,11 +300,11 @@ class _Reaction:
             # afterward against a clean single-client ChemDraw session both
             # landed correctly on the first try, so the likely cause was
             # cross-client contention (multiple automation clients hitting
-            # the same shared scratch document at once -- see README's
-            # contention note) rather than a deterministic bug in this
-            # positioning logic. This verify-and-correct doesn't depend on
-            # knowing that root cause: it catches and self-heals any
-            # single-call placement failure, whatever produces it, the same
+            # the same shared scratch document at once) rather than a
+            # deterministic bug in this positioning logic. This
+            # verify-and-correct doesn't depend on knowing that root cause:
+            # it catches and self-heals any single-call placement failure,
+            # whatever produces it, the same
             # way phase 3 already does for structures. If a placement still
             # doesn't land after the retry, it's reported in
             # violations.mislaid_captions rather than silently trusted.

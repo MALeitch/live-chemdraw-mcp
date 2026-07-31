@@ -44,8 +44,7 @@ stoichiometry grids, enhanced-stereo flags, Markush/alt-groups).
 Requires a running, visible ChemDraw instance. Both scripts attach via
 `win32com.client.GetActiveObject("ChemDraw_x64.Application")` —
 **never `Dispatch()`**, which can launch a second ChemDraw.exe process
-alongside whatever the user already has open (a documented landmine
-elsewhere in this project — see the main README's contention notes).
+alongside whatever the user already has open.
 
 ```powershell
 cd chemdraw-mcp
