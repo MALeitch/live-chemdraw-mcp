@@ -8,8 +8,8 @@ This class is composed from per-concern mixins (one file each, below) rather
 than defined in one file — the original single-file version grew past 2,000
 lines with ~90 methods covering unrelated concerns (document lifecycle,
 layout, shorthand contraction, stereochemistry...). Every consumer
-(tools/*.py, server.py, test_bridge.py) calls bridge.<method_name>(...) as a
-flat attribute access, so the split preserves that: mixin composition makes
+(tools/*.py, server.py, test_smoke_visual.py) calls bridge.<method_name>(...)
+as a flat attribute access, so the split preserves that: mixin composition makes
 every method directly callable on the instance regardless of which file
 defines it, with no nesting and no changes needed anywhere outside this
 package. No method name is duplicated across any two mixins (that's what

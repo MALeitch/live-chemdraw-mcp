@@ -40,4 +40,4 @@ jobs:
   #     - name: Install
   #       run: .venv/Scripts/pip install -e ".[dev]"
   #     - name: Run smoke test
-  #       run: .venv/Scripts/python test_bridge.py
+  #       run: .venv/Scripts/python test_smoke_visual.py

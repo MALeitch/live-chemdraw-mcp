@@ -115,8 +115,8 @@ server attaches to a running ChemDraw (or launches one) over COM.
   bond-splitting, plus connector-internals coverage for the COM worker's
   timeout/nudge state machine and `targets.py`'s target-resolution and
   stale-cache-retry logic.
-- `.venv\Scripts\python test_bridge.py` — live smoke test; drives a visible
-  ChemDraw window end to end. Watch it run.
+- `.venv\Scripts\python test_smoke_visual.py` — live smoke test; drives a
+  visible ChemDraw window end to end. Watch it run.
 
 ## Architecture
 
@@ -153,8 +153,8 @@ above) — see its own README for details.
 
 `bridge/` used to be a single `bridge.py`; it was split into a package once
 the original file grew past 2,000 lines with ~90 methods covering unrelated
-concerns. Every consumer (`tools/*.py`, `server.py`, `test_bridge.py`) still
-calls `bridge.<method_name>(...)` as a flat attribute access — mixin
+concerns. Every consumer (`tools/*.py`, `server.py`, `test_smoke_visual.py`)
+still calls `bridge.<method_name>(...)` as a flat attribute access — mixin
 composition in `__init__.py` makes every method directly callable on the
 `ChemDrawBridge` instance regardless of which file defines it, so the split
 is invisible from outside the package and the "every tool call goes
