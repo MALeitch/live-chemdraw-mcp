@@ -366,7 +366,7 @@ def unit_formula(unit, cache=None):
 def atom_ref(atom):
     """Stable, session-scoped handle for one atom: ChemDraw's own doc-unique
     Atom.ID, already proven and in production use elsewhere (see
-    bridge._build_handle_map; README confirms it equals the CDXML export
+    bridge._build_handle_map; AGENTS.md confirms it equals the CDXML export
     node id). Cheaper and simpler than tagging every atom the way units
     are tagged — tagging is fine at unit granularity (a handful per
     document) but would add a COM round trip per atom at this scale."""
@@ -506,7 +506,7 @@ def _resolve_selection(doc, cache):
     # sel.Groups only ever reports Group-type selections. iter_units'
     # own definition of "unit" also includes a top-level Fragment the
     # user drew by hand and never wrapped in a Group (see module
-    # docstring; README documents this as a real, observed case) --
+    # docstring; AGENTS.md documents this as a real, observed case) --
     # sel.Groups has no equivalent for that. Rather than guess at an
     # unverified Selection.Fragments-style COM property, detect it the
     # same proven way bridge._capture_selection detects any selection

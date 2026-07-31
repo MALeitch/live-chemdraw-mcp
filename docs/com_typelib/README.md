@@ -7,7 +7,7 @@ than inferred from documentation. It exists to answer one question quickly:
 *"does ChemDraw's COM API support X, and what does that surface actually look
 like?"* — without re-probing from scratch every time.
 
-This complements, but doesn't duplicate, the main [README](../../README.md)'s
+This complements, but doesn't duplicate, [`AGENTS.md`](../../AGENTS.md)'s
 "Hard-won ChemDraw COM facts" section: that section documents facts about
 code **already written** in this connector (landmines hit and fixed); this
 folder is the source of truth for COM surface **confirmed to exist but not

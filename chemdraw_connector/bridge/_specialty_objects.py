@@ -527,7 +527,7 @@ class _SpecialtyObjects:
             }
         # Scale beyond SLOW_TIMEOUT for plates with many lanes/spots --
         # never loop a mutating COM call across many items inside one
-        # fixed timeout (see README's wedge-detector note).
+        # fixed timeout (see AGENTS.md's wedge-detector note).
         total_spots = sum(len(spots) for spots in lanes)
         timeout = max(SLOW_TIMEOUT, 3.0 * (len(lanes) + total_spots) + 10.0)
         return self._run(go, timeout=timeout)

@@ -251,8 +251,8 @@ def associate_captions(structures, captions, wrapper_map=None,
        reading `cap.Group` back afterward is always None — so without this
        tag, every connector-created caption would fall straight through to
        the spatial tiers (4/5), which misfire once a caption is separated
-       from its structure (see fix_caption_gaps' docstring and the
-       README's caption-gap incident for why that's a real, observed
+       from its structure (see fix_caption_gaps' docstring and
+       AGENTS.md's caption-gap incident for why that's a real, observed
        failure mode, not a hypothetical one). A tag that doesn't resolve
        to any known id (deleted structure, or a snapshot/region that
        excludes it) falls through to the tiers below rather than being
