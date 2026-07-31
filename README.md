@@ -1,9 +1,9 @@
-# chemdraw-mcp
+# live-chemdraw-mcp
 
-[![Tests](https://github.com/MALeitch/chemdraw-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/MALeitch/chemdraw-mcp/actions/workflows/tests.yml)
+[![Tests](https://github.com/MALeitch/live-chemdraw-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/MALeitch/live-chemdraw-mcp/actions/workflows/tests.yml)
 
-MCP server that connects Claude to a **live ChemDraw window** on Windows via
-COM automation — Claude can draw, edit, and organize structures directly in
+MCP server that connects AI assistants to a **live ChemDraw window** on
+Windows via COM automation — draw, edit, and organize structures directly in
 the document you have open.
 
 **Capabilities:**
@@ -89,19 +89,19 @@ Python 3.14.
 ## Setup
 
 ```powershell
-cd chemdraw-mcp
+cd live-chemdraw-mcp
 python -m venv .venv
 .venv\Scripts\python -m pip install pywin32 rdkit "mcp[cli]" pytest
 ```
 
 Register in `%APPDATA%\Claude\claude_desktop_config.json` (replace
-`C:\\path\\to\\chemdraw-mcp` with wherever you cloned it):
+`C:\\path\\to\\live-chemdraw-mcp` with wherever you cloned it):
 
 ```json
 "mcpServers": {
   "chemdraw": {
-    "command": "C:\\path\\to\\chemdraw-mcp\\.venv\\Scripts\\python.exe",
-    "args": ["C:\\path\\to\\chemdraw-mcp\\server.py"]
+    "command": "C:\\path\\to\\live-chemdraw-mcp\\.venv\\Scripts\\python.exe",
+    "args": ["C:\\path\\to\\live-chemdraw-mcp\\server.py"]
   }
 }
 ```

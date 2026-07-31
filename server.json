@@ -1,11 +1,11 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.MALeitch/chemdraw-mcp",
+  "name": "io.github.MALeitch/live-chemdraw-mcp",
   "description": "Connects AI assistants to a live ChemDraw window on Windows via COM automation.",
   "repository": {
-    "url": "https://github.com/MALeitch/chemdraw-mcp",
+    "url": "https://github.com/MALeitch/live-chemdraw-mcp",
     "source": "github"
   },
   "version": "1.0.0",
-  "websiteUrl": "https://github.com/MALeitch/chemdraw-mcp#readme"
+  "websiteUrl": "https://github.com/MALeitch/live-chemdraw-mcp#readme"
 }

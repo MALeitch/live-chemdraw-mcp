@@ -1,4 +1,4 @@
-# chemdraw-mcp CI Configuration
+# live-chemdraw-mcp CI Configuration
 # Place in .github/workflows/tests.yml
 
 name: Tests

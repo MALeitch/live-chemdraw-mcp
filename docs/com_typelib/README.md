@@ -49,7 +49,7 @@ Requires a running, visible ChemDraw instance. Both scripts attach via
 alongside whatever the user already has open.
 
 ```powershell
-cd chemdraw-mcp
+cd live-chemdraw-mcp
 .venv\Scripts\python.exe docs\com_typelib\probe_typelib.py `
     > docs\com_typelib\typelib_dump_<date>.txt
 .venv\Scripts\python.exe docs\com_typelib\probe_typelib2.py `

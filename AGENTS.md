@@ -1,4 +1,4 @@
-# AGENTS.md — chemdraw-mcp development notes
+# AGENTS.md — live-chemdraw-mcp development notes
 
 This file is for anyone reading the source in `chemdraw_connector/` --
 AI coding assistants and human contributors alike, whether you're
