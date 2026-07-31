@@ -1,11 +1,16 @@
 # AGENTS.md — chemdraw-mcp development notes
 
-This file is for AI coding assistants and human contributors working ON
-this codebase — not for end users of the MCP server (see `README.md` for
-that). It covers the package layout and, more importantly, the ChemDraw
-COM quirks this connector was built around: most of these were only found
-by driving live ChemDraw and watching it misbehave, and re-deriving them
-from scratch is expensive. Read this before touching `chemdraw_connector/`.
+This file is for anyone reading the source in `chemdraw_connector/` --
+AI coding assistants and human contributors alike, whether you're
+extending it, debugging something, or just want to understand why it's
+built the way it is. Not for end users of the MCP server (see
+`README.md` for that): none of this matters if you're only talking to
+the server through Claude, since it exists precisely to hide these
+details from that caller. It covers the package layout and, more
+importantly, the ChemDraw COM quirks this connector was built around:
+most of these were only found by driving live ChemDraw and watching it
+misbehave, and re-deriving them from scratch is expensive. Read this
+before working in `chemdraw_connector/` for any reason.
 
 ## Architecture
 

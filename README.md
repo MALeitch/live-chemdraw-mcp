@@ -74,7 +74,9 @@ This README covers setup and usage — not a per-tool reference (each tool's
 exact parameters, return shape, and usage notes live in its own docstring,
 visible to any MCP client via its tool listing) and not internal
 architecture or ChemDraw-COM implementation notes (see
-[`AGENTS.md`](AGENTS.md) for those, if you're extending this codebase).
+[`AGENTS.md`](AGENTS.md) for those — useful reading whenever you're
+looking at the source, whether you're debugging something, curious how
+it works, or extending it, not only for the last one).
 
 Built and validated against **ChemDraw 26 (Revvity)** on Windows 11 /
 Python 3.14.
@@ -124,7 +126,11 @@ server attaches to a running ChemDraw (or launches one) over COM.
 
 Package layout, and the ChemDraw COM quirks this connector was built
 around (COM crash traps, silent no-ops, timing/caching gotchas) — see
-[`AGENTS.md`](AGENTS.md) if you're extending this codebase.
+[`AGENTS.md`](AGENTS.md) whenever you're looking at the source, not only
+if you're extending it. None of it matters if you're just talking to the
+server through Claude (that's what the rest of this README covers), but
+it's the fastest way to understand why the code is shaped the way it is
+if you're reading it for any reason.
 
 ## Troubleshooting
 
