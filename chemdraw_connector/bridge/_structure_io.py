@@ -185,6 +185,17 @@ class _StructureIO:
                      overwrite=False):
         def go():
             doc = self._doc()
+            if path:
+                # Validate the write target FIRST -- before touching the
+                # document's selection or paying for GetData's render.
+                # FIXED (DEBUG_REPORT.md L-1, 2026-07-31): this guard used
+                # to run AFTER the multi-id-target branch below mutated
+                # the live document's selection (doc.Objects.Unselect() +
+                # setting .Selected on each unit), so a call the guard
+                # went on to refuse had already replaced whatever the
+                # user had selected in ChemDraw -- a mutation from a call
+                # that reports failure.
+                self._guard_write_path(path, overwrite)
             mime = t.mime_for(fmt)
             if target == "document":
                 objs = doc.Objects
@@ -213,7 +224,6 @@ class _StructureIO:
             if not data:
                 raise ChemDrawError(f"ChemDraw returned no {fmt} data")
             if path:
-                self._guard_write_path(path, overwrite)
                 with open(path, "wb") as fh:
                     fh.write(data)
                 return {"path": path, "bytes": len(data)}

@@ -252,21 +252,40 @@ class _Plumbing:
             return False
 
     @staticmethod
-    def _guard_write_path(path, overwrite):
+    def _guard_write_path(path, overwrite, create_parent=False):
         """Validate a generic file-write target (export_image, CSV table
         exports) before writing — same "an LLM-constructed path shouldn't
         silently destroy data" motivation as
         _DocumentSession._guard_save_path, without that method's "same
         file as the currently open document" exemption: there's no
         equivalent legitimate case for an image/CSV export, every target
-        path here is a distinct output file, not the document itself."""
+        path here is a distinct output file, not the document itself.
+
+        create_parent=False (the default, every existing caller):
+        refuses with an actionable error naming the missing directory,
+        same as every sibling write guard.
+
+        create_parent=True: auto-creates the missing parent directory
+        instead of refusing. ONLY for a caller writing to ITS OWN
+        well-known default location that this connector owns and
+        controls (e.g. export_canvas_table's default path, same
+        discipline as snapshots.write_backup_file's own
+        os.makedirs(exist_ok=True)) — never for an explicit/custom path,
+        which is exactly the "LLM-constructed path" case this guard
+        exists to protect. See DEBUG_REPORT.md M-4: _write_csv_rows used
+        to os.makedirs(exist_ok=True) unconditionally for EVERY path,
+        including an explicit custom one, silently creating a directory
+        tree instead of the actionable error this default gives."""
         parent = os.path.dirname(path)
         if parent and not os.path.isdir(parent):
-            raise InvalidInputError(
-                f"Cannot write to {path!r}: the containing directory "
-                f"{parent!r} does not exist. Create it first or choose a "
-                "different path."
-            )
+            if create_parent:
+                os.makedirs(parent, exist_ok=True)
+            else:
+                raise InvalidInputError(
+                    f"Cannot write to {path!r}: the containing directory "
+                    f"{parent!r} does not exist. Create it first or choose "
+                    "a different path."
+                )
         if os.path.exists(path) and not overwrite:
             raise InvalidInputError(
                 f"{path!r} already exists. Refusing to silently overwrite "

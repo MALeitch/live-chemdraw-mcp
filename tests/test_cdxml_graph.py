@@ -66,6 +66,23 @@ def test_bond_to_missing_node_dropped_not_crash():
     assert len(graph["bonds"]) == 1
 
 
+def test_num_hydrogens_present_vs_absent():
+    # NumHydrogens is ChemDraw's own explicit hydrogen count when present
+    # (see cdxml_document._compute_formula, which trusts it over RDKit's
+    # default-valence fill -- load-bearing for radicals, see
+    # test_cdxml_document.py's RADICAL_CDXML). Absent must stay None, not
+    # coerce to 0 -- a caller filling implicit valence itself needs to
+    # know "unasserted" from "asserted zero".
+    graph = cdxml_graph.parse("""
+    <CDXML><page><fragment>
+      <n id="1" NumHydrogens="2"/><n id="2"/>
+      <b B="1" E="2"/>
+    </fragment></page></CDXML>""")
+    by_id = {n["id"]: n for n in graph["nodes"]}
+    assert by_id[1]["num_hydrogens"] == 2
+    assert by_id[2]["num_hydrogens"] is None
+
+
 def test_parse_element_matches_parse_on_same_content():
     # ROADMAP #7 (domain/cdxml_document.py) calls parse_element directly
     # on an already-parsed <fragment>/<group> Element (one of several

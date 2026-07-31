@@ -63,7 +63,11 @@ class ComWorker:
             # user is mid-edit, then fail fast rather than queue behind it.
             self._try_unblock()
             raise ChemDrawBlockedError(
-                "(a previous call is still waiting on ChemDraw)"
+                "(a previous call is still waiting on ChemDraw -- if it "
+                "eventually completes, its effects will still land on the "
+                "canvas even though it was reported as blocked; check "
+                "chemdraw_get_document_state before assuming nothing "
+                "happened.)"
             )
         self._ensure_thread()
         future = Future()
@@ -85,7 +89,19 @@ class ComWorker:
                 pass
 
         self._wedged.set()
-        raise ChemDrawBlockedError() from None
+        # FIXED (DEBUG_REPORT.md M-1, 2026-07-31): fn is still running on
+        # the worker thread at this point -- it was never cancelled, Future
+        # can't interrupt a callable already in flight -- so this raise
+        # tells the caller "blocked/failed" while the mutation itself may
+        # still land moments later. Say so explicitly rather than implying
+        # nothing happened.
+        raise ChemDrawBlockedError(
+            "(this call's own operation may still be running in the "
+            "background and could still complete or mutate the document "
+            "after this error is returned -- it was not and cannot be "
+            "cancelled. Re-check chemdraw_get_document_state before "
+            "retrying, to avoid applying the same change twice.)"
+        ) from None
 
     def _try_unblock(self):
         if self._unblock_hook is None:

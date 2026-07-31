@@ -538,7 +538,18 @@ class _Reaction:
         Each step is isolated: one step's failure (bad SMILES, missing
         reactants/products key, etc.) is caught and reported in `failed`
         without stopping the rest of the route -- same per-item isolation
-        convention as edit_atoms/edit_bonds/the shorthand batch tools."""
+        convention as edit_atoms/edit_bonds/the shorthand batch tools.
+
+        FIXED (DEBUG_REPORT.md M-2, 2026-07-31): the QC call
+        (check_warnings) used to run INSIDE the same try as the mutation
+        (make_reaction_scheme), so a step whose structures/arrow/captions
+        drew successfully but whose follow-up check_warnings call happened
+        to raise was reported in `failed` anyway -- discarding its
+        object_ids/backup_path/violations and telling the caller the step
+        never happened, when the canvas disagreed. A drawn step is now
+        always reported in `steps`; if check_warnings itself fails, that
+        step's `warnings` is null and `warnings_error` carries the
+        message, rather than losing the step."""
         results, failed = [], []
         for i, step in enumerate(steps):
             try:
@@ -546,10 +557,18 @@ class _Reaction:
                     step["reactants"], step["products"],
                     step.get("reagents_text"), step.get("format", "smiles"),
                     step.get("conditions_text"), yields=step.get("yields"))
-                r["warnings"] = self.check_warnings(r["object_ids"])
-                results.append({"step_index": i, **r})
             except Exception as exc:
                 failed.append({"step_index": i, "error": str(exc)})
+                continue
+            try:
+                r["warnings"] = self.check_warnings(r["object_ids"])
+            except Exception as exc:
+                # The step is already drawn on the canvas -- a QC-call
+                # failure here must not make it disappear into `failed`
+                # and lose its object_ids/backup_path.
+                r["warnings"] = None
+                r["warnings_error"] = str(exc)
+            results.append({"step_index": i, **r})
         return {
             "steps": results,
             "failed": failed,

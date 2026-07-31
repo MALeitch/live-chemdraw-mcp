@@ -62,8 +62,7 @@ class _Enumeration:
             "count": len(rows),
         }
 
-    @staticmethod
-    def _write_csv_rows(rows, path, overwrite=False):
+    def _write_csv_rows(self, rows, path, overwrite=False, create_parent=False):
         """Shared CSV-writing body for export_data_table and
         export_canvas_table — one on-disk format/convention (Excel-friendly
         BOM, header row = union of keys across all rows) for every tool
@@ -71,31 +70,33 @@ class _Enumeration:
 
         overwrite: guards against silently clobbering a pre-existing file
         at an LLM-constructed path, same motivation as
-        _DocumentSession._guard_save_path/export_image's _guard_write_path
-        — this one intentionally stays a plain existence check (not the
-        shared _guard_write_path helper) because callers with a
-        well-known, designed-to-be-overwritten-every-call default path
-        (export_canvas_table) need to pass overwrite=True for that default
-        without it affecting an explicit custom path in the same call."""
+        _DocumentSession._guard_save_path/_Plumbing._guard_write_path.
+
+        create_parent: forwarded to _guard_write_path -- False (default)
+        for export_data_table, where `path` is always an explicit,
+        LLM-constructed argument with no "connector's own default
+        location" concept; export_canvas_table passes True only when
+        writing to ITS OWN well-known default path. FIXED
+        (DEBUG_REPORT.md M-4, 2026-07-31): this used to
+        os.makedirs(exist_ok=True) unconditionally for every path
+        (a plain existence check, not the shared _guard_write_path
+        helper, on the mistaken belief that the default-path exemption
+        required it -- it doesn't, that exemption is computed by the
+        caller into the `overwrite` value before reaching here), silently
+        creating a directory tree for a hallucinated custom path instead
+        of the actionable error every sibling write guard gives."""
         if not rows:
             raise ValueError("No rows to write")
-        if os.path.exists(path) and not overwrite:
-            raise InvalidInputError(
-                f"{path!r} already exists. Refusing to silently overwrite "
-                "it — pass overwrite=True if that's really intended, or "
-                "choose a different path."
-            )
+        self._guard_write_path(path, overwrite, create_parent=create_parent)
         fieldnames = list(dict.fromkeys(k for row in rows for k in row))
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
         return os.path.abspath(path)
 
-    @staticmethod
-    def export_data_table(rows, path, fmt="csv", overwrite=False):
+    def export_data_table(self, rows, path, fmt="csv", overwrite=False):
         if fmt != "csv":
             raise ValueError("Only csv is supported")
-        abspath = _Enumeration._write_csv_rows(rows, path, overwrite=overwrite)
+        abspath = self._write_csv_rows(rows, path, overwrite=overwrite)
         return {"path": abspath, "rows": len(rows)}

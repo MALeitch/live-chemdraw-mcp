@@ -268,7 +268,19 @@ class _DocumentSession:
         only restores the previously-active document afterward. If
         input_path was already the active document itself, this behaves
         exactly like save_document(output_path) on it directly (its window
-        now points at output_path) -- there's nothing to restore."""
+        now points at output_path) -- there's nothing to restore.
+
+        The save is wrapped so a FAILED save (most commonly
+        save_document's own overwrite=False guard refusing a pre-existing
+        output_path -- the single most likely reason this ever raises)
+        still leaves things clean: CONFIRMED LIVE (DEBUG_REPORT.md H-2,
+        2026-07-30) that without this, a plain, correctly-refused
+        overwrite=False call permanently orphaned the newly-opened
+        background document (Document.Close() is a no-op over COM, so
+        there was no way to close it after the fact either) AND silently
+        left it as the active document -- so every subsequent tool call
+        silently operated on the wrong document until the user noticed and
+        manually closed the stray window."""
         if not os.path.exists(input_path):
             raise InvalidInputError(
                 f"No file found at {input_path!r}. Check the path and "
@@ -283,7 +295,30 @@ class _DocumentSession:
         bg_name = opened["active_document"]
         newly_opened = bg_name not in documents_before
 
-        saved = self.save_document(output_path, overwrite)
+        try:
+            saved = self.save_document(output_path, overwrite)
+        except Exception:
+            # save_document raised before any COM mutation happened (the
+            # overwrite guard is a pure pre-check ahead of doc.SaveAs) --
+            # the active document is therefore still exactly bg_name,
+            # unchanged, no need to re-query it the way the success path
+            # below does. Clean up and restore with the same discipline as
+            # a successful call, then propagate the original failure --
+            # this is best-effort recovery around the real error, not a
+            # replacement for it.
+            if newly_opened:
+                try:
+                    self.close_document(bg_name, discard_changes=True)
+                except Exception:
+                    pass  # cleanup failure must never mask the real error
+            if prev_active is not None and prev_active != bg_name:
+                try:
+                    if prev_active in set(self.list_documents()["documents"]):
+                        self.set_active_document(prev_active)
+                except Exception:
+                    pass
+            raise
+
         current_name = self.list_documents()["active"]
 
         # Document names can legitimately be "" (an untitled document,

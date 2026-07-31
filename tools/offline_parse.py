@@ -41,7 +41,15 @@ def register(mcp, bridge):
         chemdraw_make_reaction_route produce, and what ChemDraw's own
         "Insert Reaction" tooling produces) -- a loose hand-drawn arrow
         with no such wrapper is still parsed as a structure/arrow, just
-        not grouped into a `reactions` entry.
+        not grouped into a `reactions` entry. CONFIRMED LIVE: ChemDraw
+        can ALSO wrap a completely unrelated loose arrow (e.g. one made
+        with chemdraw_make_arrow, positioned nowhere near what it ends up
+        paired with) in its own <scheme><step>, unprompted -- `reactions`
+        reflects ChemDraw's OWN interpretation faithfully, it is NOT a
+        guarantee every entry describes a real reaction the chemist
+        intended. A step with empty `product_ids` (an arrow with no
+        product, unusual for a real single-step scheme) is a signal to
+        treat that entry as low-confidence.
 
         Result shape matches chemdraw_get_document_state's own live
         output (structures/captions/violations/page_bounds), plus
@@ -49,7 +57,15 @@ def register(mcp, bridge):
         no live-path equivalent). `non_structure_units` covers the same
         wrapper-duplicate/decoration-group exclusions the live path
         applies, via the same domain/canvas.py classification logic,
-        unchanged."""
+        unchanged.
+
+        Content from every page in the file is included, but
+        `page_bounds`/`violations.off_page` reflect only the FIRST page's
+        extent (no known real ChemDraw export has more than one <page>
+        element, so this has not come up in practice). `extra_pages` is
+        present and non-zero only if the file actually has more than one
+        <page> -- if you see it, treat off_page violations as unreliable
+        for anything past the first page."""
         if not os.path.exists(path):
             raise InvalidInputError(
                 f"No file found at {path!r}. Check the path and retry."

@@ -131,19 +131,24 @@ def register(mcp, bridge):
         correctly flag that repeated intermediate -- that is EXPECTED for
         any real chained route, not a bug to fix.
 
-        Each step is independent: if one step fails (bad SMILES, a
+        Each step is independent: if one step fails to DRAW (bad SMILES, a
         missing reactants/products key, etc.) it's reported in `failed`
         by its step_index and error, but every OTHER step still gets
         drawn -- the whole route never aborts because of one bad step.
 
         Result fields:
-        - steps: one entry per successfully-drawn step, each with the
+        - steps: one entry per step that DREW successfully, each with the
           same object_ids/arrow_object_id/violations/warnings fields as
           chemdraw_make_reaction_scheme_verified, plus its own step_index.
           ALWAYS check each step's violations.overlapping/
           mislaid_captions/off_page and warnings.flagged the same way you
-          would for a single scheme.
-        - failed: steps that raised an error, with step_index and error.
+          would for a single scheme. A step that drew fine but whose
+          follow-up chemical-warning check itself failed still appears
+          here (its structures/arrow/captions are really on the canvas --
+          it does NOT get demoted to `failed`) with `warnings: null` and
+          a `warnings_error` message instead; treat that as "warnings
+          unavailable for this step", not as a drawing failure.
+        - failed: steps that never drew at all, with step_index and error.
         - duplicate_groups: chemdraw_find_duplicates over the whole
           document, checked once after every step is drawn -- see the
           repeated-intermediate note above before treating any entry here

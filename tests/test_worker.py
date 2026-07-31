@@ -43,12 +43,24 @@ def test_unrecoverable_block_raises_and_wedges():
         stuck.wait(timeout=5)  # never released during the test
 
     w = ComWorker(unblock_hook=lambda: False)  # nudge can't help
-    with pytest.raises(ChemDrawBlockedError):
+    with pytest.raises(ChemDrawBlockedError) as first:
         w.submit(blocked, timeout=0.2)
     assert w._wedged.is_set()
-    # A subsequent call fails fast instead of queueing behind the stuck one.
-    with pytest.raises(ChemDrawBlockedError):
+    # Regression for DEBUG_REPORT.md M-1 (2026-07-30, fixed 2026-07-31):
+    # blocked() is STILL RUNNING on the worker thread at this point (it
+    # was never cancelled -- Future can't interrupt an in-flight
+    # callable) and could still complete or mutate the document later.
+    # The error must say so, not just report "blocked" as if nothing is
+    # happening.
+    assert "still be running" in str(first.value)
+    assert "cannot be cancelled" in str(first.value)
+
+    # A subsequent call fails fast instead of queueing behind the stuck one
+    # -- its message is about the PRIOR call, since this new fn was never
+    # even submitted to the worker (early return before self._queue.put).
+    with pytest.raises(ChemDrawBlockedError) as second:
         w.submit(lambda: 1, timeout=0.2)
+    assert "previous call" in str(second.value)
     stuck.set()
 
 

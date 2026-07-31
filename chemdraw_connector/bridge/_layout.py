@@ -555,7 +555,8 @@ class _Layout:
                 os.path.dirname(snapshots.BACKUP_DIR),
                 self.DEFAULT_CANVAS_EXPORT_NAME)
             abspath = self._write_csv_rows(
-                rows, out_path, overwrite=(overwrite or path is None))
+                rows, out_path, overwrite=(overwrite or path is None),
+                create_parent=(path is None))
             counts = {"structures": len(built["structures"]),
                       "captions": len(built["captions"]),
                       "boxes": len(built["boxes"]),

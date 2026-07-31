@@ -350,7 +350,20 @@ def _xlsx_drawing_ole_anchors(zf, drawing_path, ole_rel_ids):
     over after direct matches are removed, they are paired unambiguously --
     there's nothing else it could be. Anything left ambiguous beyond that
     (more than one leftover on either side) is left unresolved, and the
-    caller reports "cell": None for it rather than guessing."""
+    caller reports "cell": None for it rather than guessing.
+
+    xdr:absoluteAnchor -- the third OOXML anchor type, used when a shape
+    is positioned by absolute EMU offset (<xdr:pos>) rather than anchored
+    to a cell -- is collected here too (NOT reproduced live, static
+    reasoning only per DEBUG_REPORT.md M-5: no absolutely-anchored
+    ChemDraw embedding was available to test against). It genuinely has
+    no <xdr:from> and therefore no cell to report -- "cell": None is the
+    correct answer for it, not a gap. What WAS a gap: without collecting
+    its r:id at all, its embedding's relationship id stayed a "remaining"
+    leftover below indefinitely, which could wrongly absorb an unrelated
+    unmatched cell via the single-leftover pairing fallback. Recording it
+    with cell=None removes that mis-attribution risk even though the
+    reported cell value doesn't change."""
     root = ET.fromstring(zf.read(drawing_path))
     anchors = []  # [(rid_or_None, cell), ...]
 
@@ -363,9 +376,18 @@ def _xlsx_drawing_ole_anchors(zf, drawing_path, ole_rel_ids):
     # AlternateContent wrapper.
     for anchor in list(root.findall(".//xdr:twoCellAnchor", _NS)) + list(
         root.findall(".//xdr:oneCellAnchor", _NS)
-    ):
+    ) + list(root.findall(".//xdr:absoluteAnchor", _NS)):
         from_elem = anchor.find("xdr:from", _NS)
         if from_elem is None:
+            # xdr:absoluteAnchor (or any anchor missing <xdr:from>) --
+            # record its r:id with a None cell instead of dropping it
+            # from `anchors` entirely (see docstring above). Skip
+            # entirely if no r:id can be found either -- an
+            # unidentifiable (None, None) pair is not useful and would
+            # only risk polluting the fallback's unmatched_cells list.
+            rid = _find_ole_rid(anchor)
+            if rid is not None:
+                anchors.append((rid, None))
             continue
         cell = _xdr_from_to_a1(from_elem)
         if cell is None:

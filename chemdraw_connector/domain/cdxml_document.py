@@ -12,26 +12,56 @@ documents.
 
 Structures drawn via ChemDraw's own reaction-scheme tooling
 (<scheme><step ReactionStepReactants="10 17" ReactionStepProducts="25"
-ReactionStepArrows="51" .../></scheme> -- confirmed live from this
-connector's own chemdraw_make_reaction_scheme output) are reported under
-`reactions`, resolved by native CDX id, not spatial guessing. A loose
-hand-drawn arrow with no <scheme> wrapper is still parsed as a structure/
-arrow, just not grouped into a reaction -- no spatial "arrow position vs
-structure position" fallback heuristic (see ROADMAP.md #7's notes).
+ReactionStepArrows="48" .../></scheme> -- ReactionStepArrows points at
+the legacy SupersededBy graphic's own id, not the real <arrow>'s id (see
+the SupersededBy-alias handling below, DEBUG_REPORT.md H-1); confirmed
+live from this connector's own chemdraw_make_reaction_scheme output) are
+reported under `reactions`, resolved by native CDX id, not spatial
+guessing. A loose hand-drawn arrow with no <scheme> wrapper is still
+parsed as a structure/arrow, just not grouped into a reaction -- no
+spatial "arrow position vs structure position" fallback heuristic (see
+ROADMAP.md #7's notes).
+
+CONFIRMED LIVE (DEBUG_REPORT.md M-3, 2026-07-30) that this does NOT mean
+every `reactions` entry describes a real reaction: ChemDraw can ALSO wrap
+a completely unrelated loose arrow (e.g. one made with
+chemdraw_make_arrow, positioned nowhere near the structure it ends up
+paired with) in its own native <scheme><step>, unprompted. `reactions`
+faithfully reflects ChemDraw's OWN <scheme> interpretation -- this
+parser is not guessing, ChemDraw itself is. A reaction step with empty
+`product_ids` (an arrow with no product at all, unusual for a real
+single-step scheme) is a signal to treat that entry as low-confidence
+rather than a genuine reaction.
 
 Formula is computed by building an RDKit RWMol from each structure's
-parsed atom/bond graph and letting RDKit's own sanitization handle
-implicit hydrogens/aromaticity -- NOT a hand-rolled Hill counter. Verified
-live (2026-07-27) that ChemDraw only writes an explicit NumHydrogens
-attribute on SOME atoms (ones it needed to clean up), never universally,
-so a raw atom-only count would silently be wrong for any atom relying on
-implicit valence (i.e. most plain carbons) -- RDKit's sanitizer is the
-correct way to derive this, the same way domain/enumeration.py already
-leans on RDKit rather than reimplementing valence rules. A structure
-containing any dummy/nickname atom (a contracted label like "Ph"/"Boc")
-gets formula=None with a note instead of a guess -- true formula for a
-nickname lives in ChemDraw's own database, not the CDXML export (same
-documented limitation as domain/cdxml_snapshot.py / state.build_snapshot).
+parsed atom/bond graph. Most atoms have no NumHydrogens attribute in the
+CDXML at all -- RDKit's own sanitizer fills their implicit hydrogens from
+default valence, NOT a hand-rolled Hill counter, the same way
+domain/enumeration.py already leans on RDKit rather than reimplementing
+valence rules. But when a node DOES carry a NumHydrogens attribute
+(cdxml_graph.parse's num_hydrogens field), that count is taken as
+authoritative and stamped onto the RDKit atom via SetNoImplicit +
+SetNumExplicitHs instead of trusting RDKit's own valence-based fill.
+
+CONFIRMED LIVE (2026-07-30) that this distinction is load-bearing, not
+cosmetic: a benzyl radical ([CH2]c1ccccc1) exports with
+NumHydrogens="2" on its radical carbon (ChemDraw's own true count) plus
+Warning="An atom in this label has an invalid valence." -- RDKit's
+default-valence fill for that same carbon (0 charge, 1 explicit bond) is
+3, giving toluene's formula (C7H8) for a benzyl radical (COM's own
+ChemDraw_get_properties on the identical structure: C7H7) with no
+signal that anything was wrong. Charged species (e.g. the benzyl anion,
+NumHydrogens="2" Charge="-1") happened to still compute correctly under
+pure RDKit inference -- because RDKit's own valence model already accounts
+for formal charge -- which is why this gap survived this codebase's
+existing charged-species test coverage; the radical case has no such
+lucky coincidence, since RDKit has no way to know a neutral atom carries
+an unpaired electron rather than a full default-valence complement of
+implicit hydrogens. A structure containing any dummy/nickname atom (a
+contracted label like "Ph"/"Boc") gets formula=None with a note instead of
+a guess -- true formula for a nickname lives in ChemDraw's own database,
+not the CDXML export (same documented limitation as
+domain/cdxml_snapshot.py / state.build_snapshot).
 
 Only .cdxml is supported here -- a .cdx file must be converted first (see
 tools/offline_parse.py, which points callers at chemdraw_convert_cdx_cdxml).
@@ -79,6 +109,12 @@ def _compute_formula(graph):
             atom = Chem.Atom(n["element"])
             if n["charge"]:
                 atom.SetFormalCharge(n["charge"])
+            if n["num_hydrogens"] is not None:
+                # ChemDraw's own asserted H count -- do NOT let RDKit's
+                # default-valence sanitizer override it (see module
+                # docstring: this is what a radical/open-shell atom needs).
+                atom.SetNoImplicit(True)
+                atom.SetNumExplicitHs(n["num_hydrogens"])
             idx_of[n["id"]] = mol.AddAtom(atom)
         for b in graph["bonds"]:
             bt = _rdkit_bond_type(b["order"])
@@ -217,10 +253,27 @@ def parse_document(cdxml_text):
     canvas.build_canvas already returns for a live document
     (structures/captions/boxes/non_structure_units/violations/
     page_bounds), plus `reactions` and `arrows`/`brackets` (native-only
-    concepts with no live-path equivalent to reuse)."""
+    concepts with no live-path equivalent to reuse).
+
+    Walks EVERY <page> element, not just the first (DEBUG_REPORT.md L-2,
+    fixed 2026-07-31): content on a second/subsequent <page> used to be
+    silently dropped. Reachability of a genuinely multi-<page> CDXML
+    export was NOT confirmed -- every real ChemDraw export checked
+    (session captures, ~40 real connector backups including genuine user
+    documents) has exactly one <page>, expressing extent via
+    HeightPages/WidthPages tiling attributes on that single page rather
+    than sibling <page> elements. `page_bounds`/`violations.off_page`
+    still come from the FIRST page only -- canvas.build_canvas has no
+    multi-page concept, and there is no real multi-page export to
+    validate a design against (guessing at one would repeat exactly the
+    fixture-encodes-the-author's-assumption mistake this audit found
+    elsewhere, e.g. known bug patterns #2/#5). `extra_pages` reports how
+    many additional <page> elements were found beyond the first, so a
+    caller can tell when this limitation might actually matter, instead
+    of the previous silent content loss."""
     root = ET.fromstring(cdxml_text)
-    page = root.find(".//page")
-    if page is None:
+    pages = root.findall(".//page")
+    if not pages:
         return {
             "structures": [], "captions": [], "boxes": [],
             "non_structure_units": [], "violations": {}, "page_bounds": None,
@@ -228,26 +281,26 @@ def parse_document(cdxml_text):
         }
 
     page_width = page_height = None
-    page_box = page.get("BoundingBox")
+    page_box = pages[0].get("BoundingBox")
     if page_box:
         b = parse_bounds(page_box)
         page_width, page_height = b["right"], b["bottom"]
 
     structure_elems, caption_elems = [], []
     arrow_elems, graphic_elems, scheme_elems = [], [], []
-    _walk(page, structure_elems, caption_elems, arrow_elems, graphic_elems,
-         scheme_elems)
-
     # Map each <t> to its immediate parent <group>'s python id (if any) --
     # used for group_id below, mirroring canvas.associate_captions' tier-1
     # "grouped directly with its structure" case (the one path a caption
     # grouped BY HAND in ChemDraw's own UI, as opposed to this connector's
     # own claude_caption_owner tag, actually produces).
     group_of_child = {}
-    for group in page.iter("group"):
-        for child in group:
-            if child.tag == "t":
-                group_of_child[id(child)] = f"cdx-{group.get('id')}"
+    for page in pages:
+        _walk(page, structure_elems, caption_elems, arrow_elems, graphic_elems,
+             scheme_elems)
+        for group in page.iter("group"):
+            for child in group:
+                if child.tag == "t":
+                    group_of_child[id(child)] = f"cdx-{group.get('id')}"
 
     units, struct_native = [], {}
     for elem in structure_elems:
@@ -270,7 +323,8 @@ def parse_document(cdxml_text):
     boxes, brackets = [], []
     box_index = 0
     for elem in graphic_elems:
-        if elem.get("SupersededBy"):
+        superseded_by = elem.get("SupersededBy")
+        if superseded_by:
             # Confirmed live: ChemDraw writes a legacy/compatibility
             # <graphic GraphicType="Line" ArrowType="FullHead"> alongside
             # every real <arrow> it also exports, explicitly marked
@@ -279,6 +333,22 @@ def parse_document(cdxml_text):
             # this is just a fallback for older CDX readers. Without this
             # check it was silently picked up as a fake zero-height "box"
             # sitting exactly on top of the real arrow.
+            #
+            # CONFIRMED LIVE (2026-07-30, DEBUG_REPORT.md H-1): a
+            # <scheme><step ReactionStepArrows="..."> reference points at
+            # THIS legacy graphic's own id, not the real <arrow>'s id --
+            # so without an alias, every reaction's arrow_ids came back
+            # empty and the id landed in unresolved_ids on every healthy
+            # file. Alias this graphic's native id to whatever our-id the
+            # real arrow (already collected above, arrow loop runs first)
+            # resolved to, so a step reference through either id resolves
+            # to the same arrow. Falls back to leaving it unresolved (same
+            # as before this fix) if the target arrow id isn't found --
+            # never crashes on a malformed/unexpected document.
+            real_arrow_id = arrow_native.get(superseded_by)
+            graphic_native_id = elem.get("id")
+            if real_arrow_id is not None and graphic_native_id is not None:
+                arrow_native[graphic_native_id] = real_arrow_id
             continue
         bounds_str = elem.get("BoundingBox")
         bounds = parse_bounds(bounds_str) if bounds_str else None
@@ -335,4 +405,10 @@ def parse_document(cdxml_text):
     result["reactions"] = reactions
     result["arrows"] = arrows
     result["brackets"] = brackets
+    if len(pages) > 1:
+        # See this function's own docstring: content from every page is
+        # now included, but page_bounds/off_page violations reflect only
+        # the first page's extent. Surface the count so a caller isn't
+        # silently trusting off_page for structures actually on page 2+.
+        result["extra_pages"] = len(pages) - 1
     return result

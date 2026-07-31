@@ -342,6 +342,105 @@ def test_xlsx_sheet_name_and_anchor_cell_resolved(tmp_path):
     }
 
 
+def test_xlsx_absolute_anchor_reports_null_cell_without_stealing_fallback_pairing(tmp_path):
+    # Regression for DEBUG_REPORT.md M-5 (2026-07-30, fixed 2026-07-31):
+    # xdr:absoluteAnchor was collected by neither findall, so its
+    # embedding's relationship id stayed an unresolved "leftover" -- which
+    # could wrongly absorb an UNRELATED unmatched cell via the
+    # single-leftover pairing fallback (see
+    # office_embed._xlsx_drawing_ole_anchors's own docstring on that
+    # fallback). NOT reproduced against a real absolutely-anchored
+    # ChemDraw embedding (none available) -- this fixture is a static
+    # OOXML-spec construction, not a live capture, unlike the sibling
+    # test above.
+    #
+    # Two real OLE embeddings: one at a normal cell anchor (rId2, direct
+    # r:id match, F10) and one via absoluteAnchor (rId3, direct r:id
+    # match, no cell by definition). A third, UNRELATED shape (rId99, not
+    # an OLE relationship at all) sits at cell B2 with no matching
+    # oleObject rel of its own -- before the fix, rId3 would have stayed
+    # in `remaining_rels` and wrongly picked up B2 via the fallback.
+    files = {
+        "[Content_Types].xml": CONTENT_TYPES_XML,
+        "xl/workbook.xml": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook '
+            'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            "<sheets>"
+            '<sheet name="Sheet1" sheetId="1" r:id="rId1"/>'
+            "</sheets>"
+            "</workbook>"
+        ),
+        "xl/_rels/workbook.xml.rels": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            "</Relationships>"
+        ),
+        "xl/worksheets/sheet1.xml": (
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>'
+        ),
+        "xl/worksheets/_rels/sheet1.xml.rels": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="../embeddings/oleObject1.bin"/>'
+            '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="../embeddings/oleObject2.bin"/>'
+            "</Relationships>"
+        ),
+        "xl/drawings/drawing1.xml": (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<xdr:wsDr '
+            'xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<xdr:twoCellAnchor editAs="oneCell">'
+            "<xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff>"
+            "<xdr:row>9</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+            "<xdr:to><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff>"
+            "<xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"
+            '<xdr:sp macro="" textlink="">'
+            '<xdr:nvSpPr><xdr:cNvPr id="2" name="Object 1" r:id="rId2"/></xdr:nvSpPr>'
+            "</xdr:sp>"
+            "<xdr:clientData/>"
+            "</xdr:twoCellAnchor>"
+            "<xdr:absoluteAnchor>"
+            '<xdr:pos x="3200400" y="1600200"/>'
+            '<xdr:ext cx="1828800" cy="1143000"/>'
+            '<xdr:sp macro="" textlink="">'
+            '<xdr:nvSpPr><xdr:cNvPr id="3" name="Object 2" r:id="rId3"/></xdr:nvSpPr>'
+            "</xdr:sp>"
+            "<xdr:clientData/>"
+            "</xdr:absoluteAnchor>"
+            '<xdr:twoCellAnchor editAs="oneCell">'
+            "<xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
+            "<xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+            "<xdr:to><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff>"
+            "<xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"
+            '<xdr:sp macro="" textlink="">'
+            '<xdr:nvSpPr><xdr:cNvPr id="4" name="Unrelated Shape" r:id="rId99"/></xdr:nvSpPr>'
+            "</xdr:sp>"
+            "<xdr:clientData/>"
+            "</xdr:twoCellAnchor>"
+            "</xdr:wsDr>"
+        ),
+        "xl/embeddings/oleObject1.bin": REAL_OLE_BYTES,
+        "xl/embeddings/oleObject2.bin": REAL_OLE_BYTES,
+    }
+    path = _write_zip(tmp_path, "sheet.xlsx", files)
+
+    results = office_embed.find_embedded_cdx(path)
+
+    assert len(results) == 2
+    by_path = {r["embedding_path"]: r for r in results}
+    assert by_path["xl/embeddings/oleObject1.bin"]["location"]["cell"] == "F10"
+    # The absoluteAnchor embedding must report cell=None -- the honest
+    # answer, since it has no cell -- NOT "B2" (the unrelated shape's
+    # cell, which the pre-fix fallback would have wrongly assigned it).
+    assert by_path["xl/embeddings/oleObject2.bin"]["location"]["cell"] is None
+
+
 # ------------------------------------------------------------- generic ----
 
 def test_non_zip_file_raises_invalid_input_error(tmp_path):
