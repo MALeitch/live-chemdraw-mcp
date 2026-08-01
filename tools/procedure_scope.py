@@ -13,6 +13,8 @@ with one tool call, matching the common ask "make me a scope table from
 these R-groups.\""""
 from collections import defaultdict, deque
 
+from chemdraw_connector.domain import layout_math
+
 from ._common import TARGET_DOC, as_json, with_preview
 from .structure import _parse
 
@@ -138,12 +140,14 @@ def register(mcp, bridge):
         below each structure (its bottom edge + 12pt) -- since autonumber
         runs after the entries are placed, the two captions can land on
         top of each other for every entry that got a non-empty label.
-        ALWAYS look at the returned preview image; if captions are
-        overlapping, follow up with chemdraw_fix_caption_gaps (or
-        chemdraw_move_objects) to separate them, or re-run with
-        labels=[""]*len(substituents) so autonumber's stamp is the only
-        caption drawn (the per-entry chemistry data is still returned in
-        this call's `entries`, drawn or not).
+        ALWAYS check `violations.caption_overlap` (a list of
+        [caption_id, caption_id] pairs among this call's own entries,
+        computed from chemdraw_get_layout's real post-autonumber caption
+        bounds -- not a visual guess); if it's non-empty, follow up with
+        chemdraw_fix_caption_gaps (or chemdraw_move_objects) to separate
+        them, or re-run with labels=[""]*len(substituents) so autonumber's
+        stamp is the only caption drawn (the per-entry chemistry data is
+        still returned in this call's `entries`, drawn or not).
 
         check_warnings_target (default "document", run automatically at
         the end) is passed to chemdraw_check_warnings -- ALWAYS check the
@@ -217,6 +221,33 @@ def register(mcp, bridge):
 
         warnings_result = bridge.check_warnings(_parse(check_warnings_target))
 
+        # Catch the KNOWN CAVEAT above (label caption + autonumber caption
+        # sharing one anchor point) with real post-placement geometry
+        # instead of asking the caller to eyeball the preview image --
+        # same "measure the real result" approach _reaction.py's own
+        # violations.overlapping already uses. Scoped to just THIS call's
+        # own entries (matched via each caption's tag_owner_id, which
+        # _add_caption_to_unit stamps with the owning structure's
+        # object_id for both the label and the numbering caption) so an
+        # unrelated caption already on the page can't produce a false
+        # positive.
+        entry_ids = set(table_result["object_ids"])
+        own_captions = [
+            c for c in bridge.get_layout()["captions"]
+            if c.get("tag_owner_id") in entry_ids
+        ]
+        caption_boxes = [
+            layout_math.Box(c["bounds"]["left"], c["bounds"]["top"],
+                            c["bounds"]["right"], c["bounds"]["bottom"])
+            for c in own_captions
+        ]
+        caption_overlap = [
+            list(p) for p in layout_math.find_overlaps(
+                caption_boxes, ids=[c["id"] for c in own_captions])
+        ]
+        violations = dict(table_result["violations"])
+        violations["caption_overlap"] = caption_overlap
+
         entries_out = []
         for k, (row, orig_idx, label) in enumerate(
                 zip(rows, original_indices, labels_used)):
@@ -233,7 +264,7 @@ def register(mcp, bridge):
             "failed_substituents": enum_result["failed"],
             "columns": table_result["columns"],
             "page_width_points": table_result["page_width_points"],
-            "violations": table_result["violations"],
+            "violations": violations,
             "backup_path": table_result["backup_path"],
             "numbered": autonumber_result["numbered"],
             "warnings": warnings_result,

@@ -12,8 +12,15 @@ mcp = FastMCP(
         "before manipulating anything you didn't just create this turn, call "
         "chemdraw_get_document_state or chemdraw_diff_since_last_check to see "
         "the current canvas (the user may have edited by hand). Layout tools "
-        "return preview images — inspect them and iterate rather than "
-        "trusting the first arrangement."
+        "return preview images for spacing/overlap judgment calls that have "
+        "no numeric equivalent — inspect them and iterate rather than "
+        "trusting the first arrangement. But for anything checkable as data "
+        "(substitution position, exact colors, atom/bond identity, counts), "
+        "verify against chemdraw_get_document_state/chemdraw_list_atoms/"
+        "chemdraw_get_properties first; images are unreliable for precise "
+        "structural facts (fine positional relationships, small text, near-"
+        "identical shades) and should confirm a data-based conclusion, not "
+        "substitute for one."
     ),
 )
 

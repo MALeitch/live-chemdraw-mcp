@@ -296,7 +296,11 @@ def register(mcp, bridge):
         "is the way to clean up an orphaned caption (its owning structure "
         "already deleted) or a bad TLC plate/arrow/bracket, none of which "
         "chemdraw_undo can reach (it only reverts the user's own manual "
-        "edits, never this connector's own mutations)."))
+        "edits, never this connector's own mutations). "
+        "DELETING MULTIPLE OBJECTS: collect every id first, then pass them "
+        "all as ONE JSON list in a SINGLE call -- do not call this "
+        "once per id in a loop, that's several round trips for one "
+        "logical delete."))
     def chemdraw_remove(target: str) -> str:
         return as_json(bridge.remove(_parse(target)))
 

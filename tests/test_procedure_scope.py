@@ -25,11 +25,12 @@ class _FakeMCP:
 
 class _FakeBridge:
     def __init__(self, enum_result, table_result, autonumber_result,
-                 warnings_result):
+                 warnings_result, layout_result=None):
         self._enum_result = enum_result
         self._table_result = table_result
         self._autonumber_result = autonumber_result
         self._warnings_result = warnings_result
+        self._layout_result = layout_result or {"captions": []}
         self.calls = {}
 
     def enumerate_derivatives(self, substituents, scaffold, fmt, properties):
@@ -50,9 +51,13 @@ class _FakeBridge:
         self.calls["check_warnings"] = target
         return self._warnings_result
 
+    def get_layout(self, target="document"):
+        self.calls["get_layout"] = target
+        return self._layout_result
+
 
 def _register(enum_result, table_result=None, autonumber_result=None,
-              warnings_result=None):
+              warnings_result=None, layout_result=None):
     table_result = table_result or {
         "object_ids": ["id-oh", "id-nh2"],
         "fragment_ids": [["id-oh"], ["id-nh2"]],
@@ -71,7 +76,7 @@ def _register(enum_result, table_result=None, autonumber_result=None,
     }
     mcp = _FakeMCP()
     bridge = _FakeBridge(enum_result, table_result, autonumber_result,
-                         warnings_result)
+                         warnings_result, layout_result)
     procedure_scope.register(mcp, bridge)
     return mcp.tools["chemdraw_generate_scope_figure"], bridge
 
@@ -182,3 +187,39 @@ def test_full_chain_called_with_expected_args():
 
     assert bridge.calls["autonumber"][0] == "document"
     assert bridge.calls["check_warnings"] == "document"
+
+
+def test_caption_overlap_detected_between_label_and_number():
+    # id-oh's label caption and autonumber caption land on the same spot
+    # (the KNOWN CAVEAT) -- id-nh2's pair doesn't overlap.
+    layout_result = {"captions": [
+        {"id": "cap-1", "tag_owner_id": "id-oh",
+         "bounds": {"left": 0, "top": 0, "right": 20, "bottom": 10}},
+        {"id": "cap-2", "tag_owner_id": "id-oh",
+         "bounds": {"left": 2, "top": 1, "right": 22, "bottom": 11}},
+        {"id": "cap-3", "tag_owner_id": "id-nh2",
+         "bounds": {"left": 200, "top": 200, "right": 220, "bottom": 210}},
+        {"id": "cap-4", "tag_owner_id": "id-nh2",
+         "bounds": {"left": 100, "top": 100, "right": 120, "bottom": 110}},
+        # unrelated caption already on the page -- must not be counted.
+        {"id": "cap-unrelated", "tag_owner_id": "some-other-structure",
+         "bounds": {"left": 0, "top": 0, "right": 20, "bottom": 10}},
+    ]}
+    fn, bridge = _register(_ENUM_RESULT, layout_result=layout_result)
+    result = json.loads(fn(["[*]O", "bad", "[*]N"], scaffold="c1ccccc1[*]"))
+
+    overlap = result["violations"]["caption_overlap"]
+    assert overlap == [["cap-1", "cap-2"]]
+    assert bridge.calls["get_layout"] == "document"
+
+
+def test_caption_overlap_empty_when_captions_are_spaced_out():
+    layout_result = {"captions": [
+        {"id": "cap-1", "tag_owner_id": "id-oh",
+         "bounds": {"left": 0, "top": 0, "right": 20, "bottom": 10}},
+        {"id": "cap-2", "tag_owner_id": "id-oh",
+         "bounds": {"left": 0, "top": 50, "right": 20, "bottom": 60}},
+    ]}
+    fn, _ = _register(_ENUM_RESULT, layout_result=layout_result)
+    result = json.loads(fn(["[*]O", "bad", "[*]N"], scaffold="c1ccccc1[*]"))
+    assert result["violations"]["caption_overlap"] == []
