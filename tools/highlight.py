@@ -1,0 +1,57 @@
+"""Reproduces ChemDraw's own "Highlight Color" GUI tool -- see
+chemdraw_connector/domain/highlight_cdxml.py's module docstring for the
+full investigation (no matching COM-settable property exists)."""
+from ._common import as_json
+
+
+def register(mcp, bridge):
+    @mcp.tool(description=(
+        "Apply (or clear) a real ChemDraw Highlight-Color-tool-equivalent "
+        "highlight -- the translucent color wash BEHIND a structure that a "
+        "human gets from selecting a region and clicking Apply in "
+        "ChemDraw's own Highlight Color tool. This is NOT the same as "
+        "chemdraw_edit_atom/chemdraw_edit_bond's `color` or `highlighted` "
+        "parameters -- those recolor the drawn line/label text itself "
+        "(opaque, replacing black); this leaves the original black "
+        "structure intact and adds a color wash behind it, confirmed live "
+        "to be visually identical to the real GUI tool. target: a SINGLE "
+        "structure id (not 'document'/'selection'/a list -- this "
+        "necessarily deletes and reimports the one structure it touches, "
+        "since no live property exists to set instead). The returned "
+        "`id` is the SAME as `target`, not a new one -- the underlying "
+        "ChemDraw objects are replaced but the id tag survives the round "
+        "trip. highlights: list of {\"color\": \"#RRGGBB\" or omitted/"
+        "null to CLEAR that region, \"atom_refs\"?: [...], \"bond_refs\"?: "
+        "[...]} (refs from chemdraw_list_atoms, e.g. ['a56', 'a57'], "
+        "['b55-56']) -- put MULTIPLE regions/colors in ONE call (e.g. a "
+        "6-color rainbow across one molecule, one entry per atom/bond, is "
+        "N entries in ONE call, not N separate calls: every entry is "
+        "applied to the same pre-mutation export before the one "
+        "delete+reimport, so there's no per-call overhead or ref-"
+        "staleness to manage between regions). Omit BOTH refs in an "
+        "entry for 'the whole structure' -- matching 'select the ring, "
+        "hit Apply'. Giving ONLY atom_refs (or ONLY bond_refs) in an "
+        "entry means exactly that -- just those atoms with no bonds (or "
+        "vice versa) -- NOT 'these atoms plus every bond in the "
+        "structure'; only omitting both means 'everything'. Entries "
+        "apply in order; a later entry can override an earlier one's "
+        "color on the same atoms/bonds (e.g. a granular per-atom rainbow "
+        "needs one entry per atom/bond, each scoped to just that atom or "
+        "bond, or an earlier entry's whole-structure color would win "
+        "over later ones only where they don't overlap). The result's "
+        "`applied` list reports "
+        "highlighted_atoms/highlighted_bonds per entry, counted at "
+        "injection time (matched atom_refs/bond_refs, from BEFORE this "
+        "call, become stale AFTER it -- reimport reassigns fresh internal "
+        "ids; call chemdraw_list_atoms again before highlighting the same "
+        "structure a second time). Position is explicitly restored to "
+        "match the original after reimport. COLOR CHOICE: prefer bright "
+        "colors -- pure HSV hues at full saturation/value (e.g. '#0000FF' "
+        "blue, '#8000FF' violet) still read as visually dark and make "
+        "the black bond lines/labels drawn on top hard to see; a hue "
+        "swept at HSL lightness ~0.6 (colorsys.hls_to_rgb(h, 0.6, 1.0), "
+        "not hsv_to_rgb(h, 1.0, 1.0)) keeps every hue -- including blues "
+        "and violets -- light enough that the underlying structure stays "
+        "legible."))
+    def chemdraw_highlight_structure(target: str, highlights: list[dict]) -> str:
+        return as_json(bridge.highlight_structure(target, highlights))

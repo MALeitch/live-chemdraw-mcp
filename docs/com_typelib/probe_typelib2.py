@@ -30,6 +30,10 @@ TARGETS = {
     "CDBracketUsage", "CDPolymerRepeatPattern", "CDGeometryType", "CDConstraintType",
     "MenuBars", "Menu", "MenuItem", "MenuItems",
     "IChemDrawAnnotations",
+    "IChemDrawObject", "IChemDrawAtom", "IChemDrawBond", "IChemDrawText",
+    "IChemDrawGraphic", "IChemDrawGroup",
+    "IChemDrawSettings", "IChemDrawPreferences", "IChemDrawApplication",
+    "IChemDrawDocument",
 }
 
 by_name = {}

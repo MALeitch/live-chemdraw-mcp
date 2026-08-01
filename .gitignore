@@ -7,3 +7,7 @@ __pycache__/
 # Internal development docs -- kept locally, not shipped in the public repo.
 /DEBUG_REPORT.md
 /ROADMAP.md
+
+# Scratch marketing-image test output from live ChemDraw sessions --
+# personal working files, not shipped in the public repo.
+/marketing/

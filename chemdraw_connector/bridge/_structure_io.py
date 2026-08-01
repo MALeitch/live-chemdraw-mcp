@@ -200,6 +200,31 @@ class _StructureIO:
                 objs = doc.Objects
             else:
                 units = targets.resolve(doc, target, self._cache_for(doc))
+                # ChemDraw's Selection.GetData silently renders a BLANK
+                # image (valid PNG bytes, zero content) for any object
+                # sitting outside the page bounds -- confirmed live: no
+                # COM error, no empty `data`, just a white image the
+                # `if not data` check below can never catch. Checking here
+                # with the same layout_math.page_overflow helper
+                # insert_structure already uses, and failing loud BEFORE
+                # paying for the GetData render, beats silently writing a
+                # file that looks successful but is empty. target="document"
+                # (doc.Objects.GetData, above) doesn't have this failure
+                # mode -- it auto-crops to whatever was actually drawn
+                # instead of going blank -- so this check only applies to
+                # the selection-based paths below.
+                off_page = layout_math.page_overflow(
+                    [layout_math.Box(u.Left, u.Top, u.Right, u.Bottom)
+                     for u in units],
+                    [targets.ensure_id(u) for u in units],
+                    float(doc.Width or 540.0), float(doc.Height or 720.0))
+                if off_page:
+                    raise ChemDrawError(
+                        "Refusing to export: these objects sit outside the "
+                        f"page bounds and would render as a blank image: "
+                        f"{off_page}. Reposition them first (e.g. "
+                        "chemdraw_move_objects or chemdraw_arrange_in_region) "
+                        "and retry.")
                 if len(units) == 1:
                     objs = targets.unit_objects(units[0])
                 else:

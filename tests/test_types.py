@@ -5,6 +5,7 @@ from chemdraw_connector.com.types import (
     arrow_head_type_name, arrow_head_type_value,
     bracket_type_name, bracket_type_value,
     bracket_usage_name, bracket_usage_value,
+    colorref_value_to_rgb_hex, rgb_hex_to_colorref,
     element_symbol,
     enhanced_stereo_type_name, enhanced_stereo_type_value,
     no_go_type_name, no_go_type_value,
@@ -132,3 +133,30 @@ def test_polymer_repeat_pattern_round_trip():
 def test_polymer_repeat_pattern_value_unknown_raises():
     with pytest.raises(ValueError):
         polymer_repeat_pattern_value("sideways")
+
+
+def test_rgb_hex_to_colorref_byte_order():
+    # Confirmed live against ChemDraw: Color is BGR (0x00BBGGRR), not RGB.
+    assert rgb_hex_to_colorref("#FF0000") == 0x0000FF  # red -> low byte
+    assert rgb_hex_to_colorref("#0000FF") == 0xFF0000  # blue -> high byte
+    assert rgb_hex_to_colorref("#00FF00") == 0x00FF00  # green -> middle byte
+
+
+def test_rgb_hex_to_colorref_accepts_no_leading_hash():
+    assert rgb_hex_to_colorref("FF0000") == 0x0000FF
+
+
+def test_rgb_hex_to_colorref_invalid_raises():
+    with pytest.raises(ValueError):
+        rgb_hex_to_colorref("#FF00")
+    with pytest.raises(ValueError):
+        rgb_hex_to_colorref("#GGGGGG")
+
+
+def test_colorref_value_to_rgb_hex_round_trip():
+    for hexs in ("#FF0000", "#00FF00", "#0000FF", "#FF8000", "#000000"):
+        assert colorref_value_to_rgb_hex(rgb_hex_to_colorref(hexs)) == hexs
+
+
+def test_colorref_value_to_rgb_hex_zero_is_black():
+    assert colorref_value_to_rgb_hex(0) == "#000000"

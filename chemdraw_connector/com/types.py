@@ -131,6 +131,39 @@ def bond_display_value(name):
         ) from None
 
 
+def rgb_hex_to_colorref(hex_str):
+    """'#RRGGBB' -> Windows COLORREF int (0x00BBGGRR), the format
+    IChemDrawObject.Color actually takes -- confirmed live (2026-07-31):
+    setting an Atom/Bond's .Color to 0x0000FF renders red, 0x00FF0000
+    renders blue, i.e. byte order is B,G,R, not R,G,B. Every caller of
+    this connector gives colors as ordinary '#RRGGBB' hex; the BGR
+    reordering happens here, once, so nobody else has to get it backwards."""
+    s = hex_str.lstrip("#")
+    if len(s) != 6:
+        raise ValueError(
+            f"Expected a 6-digit hex color like '#FF8000', got {hex_str!r}")
+    try:
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    except ValueError:
+        raise ValueError(
+            f"Expected a 6-digit hex color like '#FF8000', got {hex_str!r}"
+        ) from None
+    return (b << 16) | (g << 8) | r
+
+
+def colorref_value_to_rgb_hex(value):
+    """Inverse of rgb_hex_to_colorref, for reporting a post-write Color
+    readback back to a caller as ordinary '#RRGGBB' instead of a raw BGR
+    int. value=0 (ChemDraw's default/unset) reports as '#000000' (black),
+    which is correct -- unset Color renders as plain black, same as an
+    explicit black."""
+    value = int(value)
+    r = value & 0xFF
+    g = (value >> 8) & 0xFF
+    b = (value >> 16) & 0xFF
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
 def mime_for(fmt):
     try:
         return FORMAT_MIME[fmt]

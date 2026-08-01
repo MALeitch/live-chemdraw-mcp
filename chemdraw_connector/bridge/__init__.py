@@ -19,6 +19,7 @@ invariant if one is ever added.
 from ._annotations import _Annotations
 from ._document_session import _DocumentSession
 from ._enumeration import _Enumeration
+from ._highlight import _Highlight
 from ._layout import _Layout
 from ._manipulation import _Manipulation
 from ._plumbing import _Plumbing
@@ -38,7 +39,7 @@ class ChemDrawBridge(_Plumbing, _DocumentSession, _Selection, _StateDiff,
                      _StructureIO, _PropertiesQC, _Manipulation,
                      _Stereochemistry, _Shorthand, _Layout, _Style,
                      _Reaction, _Enumeration, _Annotations, _SpecialtyObjects,
-                     _Stoichiometry):
+                     _Stoichiometry, _Highlight):
     """See the module docstring above. Only _Plumbing may define __init__ —
     it's the sole owner of self._conn/_worker/_caches/_last_backup/_doc_name.
     A future mixin that adds its own __init__ without calling

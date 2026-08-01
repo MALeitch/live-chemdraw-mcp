@@ -307,9 +307,20 @@ def register(mcp, bridge):
         "this once before editing atoms/bonds you didn't just create, then "
         "pass the ref to chemdraw_edit_atom/chemdraw_edit_bond/"
         "chemdraw_add_atom/chemdraw_set_bond_stereo instead of guessing a "
-        "1-based index. " + TARGET_DOC))
-    def chemdraw_list_atoms(target: str = "selection") -> str:
-        return as_json(bridge.list_atoms_bonds(_parse(target)))
+        "1-based index. elements: optional list of element symbols (e.g. "
+        "['N', 'F']) to filter the returned atoms to — use this for "
+        "target='document' on anything but a small page; an unfiltered "
+        "document-wide call can return every atom's full detail for every "
+        "structure and blow past the tool result size limit. A structure "
+        "with none of the requested elements is dropped entirely rather "
+        "than returned with an empty atoms list. include_bonds=false "
+        "skips bonds in the response when you only need atoms — smaller "
+        "payload, same atom data either way. " + TARGET_DOC))
+    def chemdraw_list_atoms(target: str = "selection",
+                            elements: list[str] | None = None,
+                            include_bonds: bool = True) -> str:
+        return as_json(bridge.list_atoms_bonds(_parse(target), elements,
+                                               include_bonds))
 
     @mcp.tool(description=(
         "Compute which atoms/bonds lie on one side of a bond, WITHOUT "
@@ -330,37 +341,57 @@ def register(mcp, bridge):
     @mcp.tool(description=(
         "Change an existing atom's element (symbol, e.g. 'N'), formal "
         "charge (pass set_charge=true to apply charge, so 0 can be set "
-        "explicitly), and/or isotope label (pass set_isotope=true; e.g. "
+        "explicitly), isotope label (pass set_isotope=true; e.g. "
         "isotope=13 for 13C, isotope=2 for D — confirmed to survive export "
         "as real isotope notation: SMILES '[13CH2]', molfile 'M  ISO' "
-        "block, not just a ChemDraw-display-only label). KNOWN LIMITATION, "
+        "block, not just a ChemDraw-display-only label), color (a "
+        "'#RRGGBB' hex string, e.g. '#FF0000' for red — confirmed live to "
+        "recolor the atom's drawn LABEL TEXT specifically; a plain carbon "
+        "with no visible label has nothing to paint, so no visible change "
+        "even though the property still applies), and/or highlighted "
+        "(true/false, IChemDrawObject.Highlighted — real and round-trips "
+        "cleanly, but NOT confirmed to be ChemDraw's actual 'Highlight "
+        "Color' GUI tool: with no color set it renders a fixed "
+        "non-configurable red; with an explicit color set it RECOLORS "
+        "the drawn line/label text to that color, opaque, replacing the "
+        "normal black — not the translucent wash behind the original "
+        "black structure the real GUI tool produces. Treat as a "
+        "distinct, still-unexplained property, not a highlight-color "
+        "substitute. KNOWN LIMITATION, "
         "confirmed live: setting isotope=0 to clear a label back to "
         "natural abundance can silently fail to take effect if the atom's "
         "isotope is already nonzero — this is a general ChemDraw quirk "
         "(charge=0 has the identical failure mode from a nonzero charge), "
         "not specific to this tool; always check the returned `isotope` "
-        "field to see whether a reset actually landed. atom_index accepts "
-        "either a 1-based position within the structure (shifts as atoms "
-        "are added/removed) or a stable ref from chemdraw_list_atoms (e.g. "
-        "'a42', recommended when editing more than one atom in a structure "
-        "you didn't just create). " + TARGET_DOC))
+        "field to see whether a reset actually landed. Neither color nor "
+        "highlighted share this quirk — both round-trip cleanly even from "
+        "a nonzero/true prior value. atom_index accepts either a 1-based "
+        "position within the structure (shifts as atoms are added/"
+        "removed) or a stable ref from chemdraw_list_atoms (e.g. 'a42', "
+        "recommended when editing more than one atom in a structure you "
+        "didn't just create). " + TARGET_DOC))
     def chemdraw_edit_atom(target: str, atom_index: int | str, element: str = "",
                            charge: int = 0, set_charge: bool = False,
-                           isotope: int = 0, set_isotope: bool = False) -> str:
+                           isotope: int = 0, set_isotope: bool = False,
+                           color: str = "",
+                           highlighted: bool | None = None) -> str:
         return as_json(bridge.edit_atom(
             _parse(target), atom_index, element or None,
             charge if set_charge else None,
-            isotope if set_isotope else None))
+            isotope if set_isotope else None,
+            color or None, highlighted))
 
     @mcp.tool(description=(
         "Change an existing bond's order: single | double | triple | "
-        "aromatic | dative. bond_index accepts either a 1-based position "
-        "within the structure or a stable ref from chemdraw_list_atoms "
-        "(e.g. 'b12-45'). " + TARGET_DOC))
+        "aromatic | dative, and/or color (a '#RRGGBB' hex string, e.g. "
+        "'#FF0000' for red — confirmed live to recolor the bond's drawn "
+        "LINE). bond_index accepts either a 1-based position within the "
+        "structure or a stable ref from chemdraw_list_atoms (e.g. "
+        "'b12-45'). " + TARGET_DOC))
     def chemdraw_edit_bond(target: str, bond_index: int | str,
-                           bond_order: str = "") -> str:
+                           bond_order: str = "", color: str = "") -> str:
         return as_json(bridge.edit_bond(_parse(target), bond_index,
-                                        bond_order or None))
+                                        bond_order or None, color or None))
 
     @mcp.tool(description=(
         "Apply many atom edits in ONE call instead of one call per atom — "
@@ -369,9 +400,11 @@ def register(mcp, bridge):
         "[{\"target\": \"claude-...\", \"atom\": \"a42\", \"element\": "
         "\"N\"}, {\"target\": \"claude-...\", \"atom\": \"a57\", "
         "\"set_charge\": true, \"charge\": -1}, {\"target\": \"claude-...\", "
-        "\"atom\": \"a12\", \"set_isotope\": true, \"isotope\": 13}, ...] "
-        "(atom accepts a ref or a 1-based index). Returns `applied` and "
-        "`failed` per-item, "
+        "\"atom\": \"a12\", \"set_isotope\": true, \"isotope\": 13}, "
+        "{\"target\": \"claude-...\", \"atom\": \"a3\", \"color\": "
+        "\"#FF0000\"}, ...] (atom accepts a ref or a 1-based index; color "
+        "is a '#RRGGBB' hex string, recolors the atom's label text — see "
+        "chemdraw_edit_atom). Returns `applied` and `failed` per-item, "
         "plus `unexpected_changes` — any structure that changed WITHOUT "
         "being in your list — the same before/after diff "
         "chemdraw_move_objects uses."))
@@ -383,8 +416,11 @@ def register(mcp, bridge):
         "the fast path once chemdraw_list_atoms has given you the refs for "
         "everything you need to change. edits: list like "
         "[{\"target\": \"claude-...\", \"bond\": \"b12-45\", "
-        "\"bond_order\": \"double\"}, ...] (bond accepts a ref or a "
-        "1-based index). Returns `applied` and `failed` per-item, plus "
+        "\"bond_order\": \"double\"}, {\"target\": \"claude-...\", "
+        "\"bond\": \"b3-4\", \"color\": \"#FF0000\"}, ...] (bond accepts "
+        "a ref or a 1-based index; color is a '#RRGGBB' hex string, "
+        "recolors the bond's drawn line — see chemdraw_edit_bond). "
+        "Returns `applied` and `failed` per-item, plus "
         "`unexpected_changes` — any structure that changed WITHOUT being "
         "in your list — the same before/after diff chemdraw_move_objects "
         "uses."))

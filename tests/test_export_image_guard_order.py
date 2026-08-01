@@ -11,13 +11,17 @@ the top of go(), before doc.Objects/targets.resolve are touched at all.
 import pytest
 
 from chemdraw_connector.bridge import _structure_io as structio
-from chemdraw_connector.errors import InvalidInputError
+from chemdraw_connector.errors import ChemDrawError, InvalidInputError
 
 
 class _FakeUnit:
-    def __init__(self, uid):
+    def __init__(self, uid, left=10.0, top=10.0, right=50.0, bottom=50.0):
         self.ID = uid
         self.Selected = False
+        self.Left = left
+        self.Top = top
+        self.Right = right
+        self.Bottom = bottom
 
 
 class _FakeObjectsCollection:
@@ -37,6 +41,8 @@ class _FakeDoc:
     def __init__(self):
         self.Objects = _FakeObjectsCollection()
         self.Selection = type("S", (), {"Objects": _FakeObjectsCollection()})()
+        self.Width = 540.0
+        self.Height = 720.0
 
 
 class _StubBridge(structio._StructureIO):
@@ -85,6 +91,7 @@ def test_successful_write_still_selects_and_renders(tmp_path, monkeypatch):
     bridge = _StubBridge(doc)
 
     monkeypatch.setattr(structio.targets, "resolve", lambda d, t, c: units)
+    monkeypatch.setattr(structio.targets, "ensure_id", lambda u: u.ID)
     monkeypatch.setattr(structio.t, "mime_for", lambda fmt: "image/png")
 
     result = bridge.export_image(target=["a", "b"], path=str(target_path))
@@ -94,3 +101,27 @@ def test_successful_write_still_selects_and_renders(tmp_path, monkeypatch):
     assert doc.Selection.Objects.get_data_called is True  # multi-unit -> renders via Selection.Objects
     assert target_path.read_bytes() == b"PNGDATA"
     assert result["bytes"] == len(b"PNGDATA")
+
+
+def test_off_page_target_refused_instead_of_rendering_blank(tmp_path, monkeypatch):
+    """ChemDraw's Selection.GetData silently renders a BLANK PNG (valid
+    bytes, zero content) for objects sitting outside the page -- no COM
+    error, so `if not data` can never catch it. Confirmed live: a scope
+    table's off-page rows exported this way produced a "successful",
+    plausible-looking, completely empty image. Must be refused up front."""
+    target_path = tmp_path / "new.png"
+
+    doc = _FakeDoc()
+    units = [_FakeUnit("a"), _FakeUnit("b", left=10.0, top=800.0, right=50.0, bottom=840.0)]
+    bridge = _StubBridge(doc)
+
+    monkeypatch.setattr(structio.targets, "resolve", lambda d, t, c: units)
+    monkeypatch.setattr(structio.targets, "ensure_id", lambda u: u.ID)
+    monkeypatch.setattr(structio.t, "mime_for", lambda fmt: "image/png")
+
+    with pytest.raises(ChemDrawError, match="outside the page bounds"):
+        bridge.export_image(target=["a", "b"], path=str(target_path))
+
+    assert doc.Objects.unselect_called is False
+    assert doc.Selection.Objects.get_data_called is False
+    assert not target_path.exists()

@@ -312,12 +312,41 @@ class _Manipulation:
             return {"removed": removed, "failed": failed}
         return self._run(go)
 
-    def list_atoms_bonds(self, target="selection"):
+    def list_atoms_bonds(self, target="selection", elements=None, include_bonds=True):
         """Enumerate atoms/bonds with stable refs in one call, so editing
         one doesn't require guessing an index first. atom_index/bond_index
         are still included (existing edit_atom/edit_bond calls can keep
         using them) but ref is the one worth keeping across calls — it
-        survives other atoms/bonds being added or removed in between."""
+        survives other atoms/bonds being added or removed in between.
+
+        elements: optional list of element symbols (e.g. ["N", "F"]) to
+        filter the returned atoms to -- added after a real pain point hit
+        live: target="document" on a modest ~250-atom, 7-structure page
+        returned a 60K-character dump (every atom's x/y/charge/isotope/
+        warning, every bond, for every structure) that blew the tool
+        result token limit, just to find "which atoms are nitrogen" for a
+        batch color edit. Filtering server-side avoids the round trip
+        through a saved-to-disk file + ad hoc Python/jq parsing that
+        became the workaround. Invalid symbols raise INVALID INPUT before
+        any COM work, same as t.element_number elsewhere. bond_index
+        stays 1-based over the FULL unfiltered bond list even when
+        elements is given -- filtering only touches which atoms are
+        reported, never atom_index/bond_index numbering, so refs/indices
+        from an unfiltered call remain valid to pass back in.
+
+        include_bonds=False skips building bond_entries (per-bond
+        bond_ref/bond_order_name/Atom1/Atom2 reads) for the same "I only
+        actually needed atoms" case. NOTE: targets.unit_atoms_bonds below
+        fetches atoms and bonds together as one unit-membership scan
+        regardless of this flag, so include_bonds=False does not skip
+        that underlying scan -- only the per-bond property reads and
+        dict-building on top of it, which is still the bulk of the
+        response-size and COM-property-read cost when bonds aren't
+        needed."""
+        wanted_numbers = None
+        if elements is not None:
+            wanted_numbers = {t.element_number(e) for e in elements}
+
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)
@@ -326,6 +355,8 @@ class _Manipulation:
                 atoms, bonds = targets.unit_atoms_bonds(doc, u, cache)
                 atom_entries = []
                 for i, a in enumerate(atoms, start=1):
+                    if wanted_numbers is not None and a.ElementNumber not in wanted_numbers:
+                        continue
                     pos = a.Position
                     atom_entries.append({
                         "ref": targets.atom_ref(a),
@@ -337,16 +368,32 @@ class _Manipulation:
                         "y": round(pos.Y, 2),
                         "warning": a.ChemicalWarning or None,
                     })
+                if wanted_numbers is not None and not atom_entries:
+                    # A structure with none of the requested elements would
+                    # otherwise show up as a hollow {"atoms": [], "bonds":
+                    # [...]} entry -- noise identical in shape to "this
+                    # structure legitimately has zero atoms" (impossible)
+                    # or a real query bug. Dropping it keeps the filtered
+                    # response's size actually proportional to the filter,
+                    # which is the entire point of adding one. Checked
+                    # BEFORE the bond_entries dict-building loop below, not
+                    # just before returning, so a dropped structure skips
+                    # those per-bond property reads rather than building
+                    # bond_entries only to throw them away (the underlying
+                    # unit_atoms_bonds scan above already ran either way --
+                    # see include_bonds' docstring note).
+                    continue
                 bond_entries = []
-                for i, b in enumerate(bonds, start=1):
-                    bond_entries.append({
-                        "ref": targets.bond_ref(b),
-                        "bond_index": i,
-                        "order": t.bond_order_name(b.BondOrder),
-                        "atom1_ref": targets.atom_ref(b.Atom1),
-                        "atom2_ref": targets.atom_ref(b.Atom2),
-                        "warning": b.ChemicalWarning or None,
-                    })
+                if include_bonds:
+                    for i, b in enumerate(bonds, start=1):
+                        bond_entries.append({
+                            "ref": targets.bond_ref(b),
+                            "bond_index": i,
+                            "order": t.bond_order_name(b.BondOrder),
+                            "atom1_ref": targets.atom_ref(b.Atom1),
+                            "atom2_ref": targets.atom_ref(b.Atom2),
+                            "warning": b.ChemicalWarning or None,
+                        })
                 out.append({
                     "id": targets.ensure_id(u),
                     "atoms": atom_entries,
@@ -359,20 +406,60 @@ class _Manipulation:
     def _apply_atom_edit(doc, cache, edit):
         """One atom edit, shared by edit_atom and edit_atoms so both stay
         in lockstep. `edit`: {"target", "atom" (ref or 1-based index),
-        "element"?, "charge"?, "set_charge"?, "isotope"?, "set_isotope"?}.
-        Raises on an unresolvable target/atom — edit_atom lets that
-        propagate as before, edit_atoms catches it per-item so one bad
-        entry doesn't fail the whole batch.
+        "element"?, "charge"?, "set_charge"?, "isotope"?, "set_isotope"?,
+        "color"?}. Raises on an unresolvable target/atom — edit_atom lets
+        that propagate as before, edit_atoms catches it per-item so one
+        bad entry doesn't fail the whole batch.
 
         isotope is a plain mass-number int (e.g. 13 for 13C, 2 for D),
         gated by set_isotope the same way charge is gated by set_charge —
         confirmed live that Atom.Isotope survives export as real isotope
         notation (SMILES `[13CH2]`, molfile `M  ISO` block), not just a
-        ChemDraw-display-only label."""
+        ChemDraw-display-only label.
+
+        color is an ordinary '#RRGGBB' hex string (e.g. '#FF0000' for
+        red) -- t.rgb_hex_to_colorref converts it to the COLORREF int
+        (0x00BBGGRR byte order) IChemDrawObject.Color actually takes, so
+        callers never touch the BGR ordering directly. Confirmed live on
+        Atom.Color specifically: it recolors the atom's LABEL TEXT (the
+        "OH"/"N"/etc. glyph ChemDraw draws), not the vertex itself -- an
+        ordinary carbon with no visible label (implicit, undrawn) shows
+        no visible change even though the property still reads back
+        correctly, which is not a bug, just Color having nothing to paint.
+        Unlike Charge/Isotope, explicit '#000000' does NOT hit the
+        "silently rejected when already nonzero" ChemDraw quirk
+        documented above -- confirmed live 0->nonzero->0 round-trips
+        cleanly on both Atom and Bond -- so color needs no set_color
+        gate; None simply means "leave unchanged", any hex string
+        including black is applied as given.
+
+        highlighted is a plain bool on IChemDrawObject.Highlighted --
+        confirmed live to round-trip cleanly True<->False (no
+        set_highlighted gate needed, same reasoning as color). NOT
+        confirmed to be ChemDraw's real "Highlight Color" GUI tool --
+        an earlier claim here said combining highlighted=true with color
+        reproduced it; that was wrong. What was actually observed:
+        Highlighted=True with Color left at 0 renders the atom/bond in a
+        fixed red; Highlighted=True with an explicit color set instead
+        RECOLORS the drawn line/label text itself to that color (thick,
+        opaque, replacing the normal black) -- indistinguishable in kind
+        from just setting color alone, not a translucent wash BEHIND the
+        original black structure the way ChemDraw's real Highlight Color
+        tool renders (confirmed by the user directly, live, after seeing
+        the actual output). Still real, still round-trips, still visibly
+        different from plain color (the fixed-red-when-unset behavior is
+        genuine) -- just not proven to be the same feature as the GUI
+        tool. Treat highlighted as a distinct, lesser-understood property
+        until the real mechanism is found, not as a highlight-color
+        substitute."""
         unit = targets.resolve(doc, edit["target"], cache)[0]
         atom, idx = targets.resolve_atom(doc, unit, edit["atom"], cache)
         if edit.get("element"):
             atom.ElementNumber = t.element_number(edit["element"])
+        if edit.get("color") is not None:
+            atom.Color = t.rgb_hex_to_colorref(edit["color"])
+        if edit.get("highlighted") is not None:
+            atom.Highlighted = bool(edit["highlighted"])
         if edit.get("set_charge"):
             atom.Charge = edit.get("charge", 0)
         if edit.get("set_isotope"):
@@ -405,10 +492,13 @@ class _Manipulation:
             "element": t.element_symbol(atom.ElementNumber),
             "charge": atom.Charge,
             "isotope": atom.Isotope or None,
+            "color": t.colorref_value_to_rgb_hex(atom.Color),
+            "highlighted": bool(atom.Highlighted),
             "warning": atom.ChemicalWarning or None,
         }
 
-    def edit_atom(self, target, atom_index, element=None, charge=None, isotope=None):
+    def edit_atom(self, target, atom_index, element=None, charge=None,
+                  isotope=None, color=None, highlighted=None):
         edit = {"target": target, "atom": atom_index}
         if element is not None:
             edit["element"] = element
@@ -418,6 +508,10 @@ class _Manipulation:
         if isotope is not None:
             edit["set_isotope"] = True
             edit["isotope"] = isotope
+        if color is not None:
+            edit["color"] = color
+        if highlighted is not None:
+            edit["highlighted"] = highlighted
 
         def go():
             doc = self._doc()
@@ -470,23 +564,41 @@ class _Manipulation:
     def _apply_bond_edit(doc, cache, edit):
         """Bond-edit counterpart to _apply_atom_edit, shared by edit_bond
         and edit_bonds. `edit`: {"target", "bond" (ref or 1-based index),
-        "bond_order"?}."""
+        "bond_order"?, "color"?}. color: see _apply_atom_edit's docstring
+        -- same '#RRGGBB' hex format, same base IChemDrawObject property,
+        confirmed live to recolor the bond's drawn LINE (not just a
+        label, since a bond has no label text). highlighted: see
+        _apply_atom_edit's docstring -- real, round-trips cleanly, but
+        NOT confirmed to be ChemDraw's actual "Highlight Color" GUI tool
+        (an earlier claim here was wrong, corrected after the user
+        directly compared the output to the real thing)."""
         unit = targets.resolve(doc, edit["target"], cache)[0]
         bond, idx = targets.resolve_bond(doc, unit, edit["bond"], cache)
         if edit.get("bond_order"):
             bond.BondOrder = t.bond_order_value(edit["bond_order"])
+        if edit.get("color") is not None:
+            bond.Color = t.rgb_hex_to_colorref(edit["color"])
+        if edit.get("highlighted") is not None:
+            bond.Highlighted = bool(edit["highlighted"])
         return {
             "id": targets.ensure_id(unit),
             "bond_index": idx,
             "ref": targets.bond_ref(bond),
             "bond_order": t.bond_order_name(bond.BondOrder),
+            "color": t.colorref_value_to_rgb_hex(bond.Color),
+            "highlighted": bool(bond.Highlighted),
             "warning": bond.ChemicalWarning or None,
         }
 
-    def edit_bond(self, target, bond_index, bond_order=None):
+    def edit_bond(self, target, bond_index, bond_order=None, color=None,
+                  highlighted=None):
         edit = {"target": target, "bond": bond_index}
         if bond_order is not None:
             edit["bond_order"] = bond_order
+        if color is not None:
+            edit["color"] = color
+        if highlighted is not None:
+            edit["highlighted"] = highlighted
 
         def go():
             doc = self._doc()
