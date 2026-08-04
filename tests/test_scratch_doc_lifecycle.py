@@ -533,3 +533,96 @@ def test_set_active_document_disambiguated_by_full_name():
         assert doc1.Activate_called is False
     finally:
         nudge_mod.bring_to_foreground = original_bring
+
+
+def test_close_document_identical_full_name_needs_index():
+    """Issue #33, live gap found 2026-08-04: sometimes duplicate-named
+    documents are the EXACT SAME FILE open as 2+ separate windows, so
+    full_name is identical across every match too -- confirmed live
+    against a real ChemDraw session. full_name alone must not be treated
+    as resolving this case; index is the only thing that can."""
+    doc1 = FakeDoc("field.cdxml")
+    doc1.FullName = r"C:\shared\field.cdxml"
+    doc2 = FakeDoc("field.cdxml")
+    doc2.FullName = r"C:\shared\field.cdxml"
+
+    app = FakeApp(documents=[doc1, doc2], active_doc=doc1)
+    bridge = _FakeBridge(app)
+
+    from chemdraw_connector.errors import InvalidInputError
+
+    try:
+        bridge.close_document("field.cdxml", discard_changes=True,
+                              full_name=r"C:\shared\field.cdxml")
+        assert False, "Should have raised InvalidInputError"
+    except InvalidInputError as e:
+        msg = str(e)
+        assert "ambiguous" in msg.lower()
+        assert "index" in msg.lower()
+    assert app.Documents.Count == 2
+
+
+def test_close_document_disambiguated_by_index():
+    """Issue #33: index (1-based, matching chemdraw_list_documents' own
+    order) resolves even the identical-full_name case."""
+    doc1 = FakeDoc("field.cdxml")
+    doc1.FullName = r"C:\shared\field.cdxml"
+    doc2 = FakeDoc("field.cdxml")
+    doc2.FullName = r"C:\shared\field.cdxml"
+
+    app = FakeApp(documents=[doc1, doc2], active_doc=doc1)
+    bridge = _FakeBridge(app)
+
+    import chemdraw_connector.com.doc_window as doc_window_mod
+    import chemdraw_connector.com.nudge as nudge_mod
+
+    original_active_mdi_child = doc_window_mod.active_mdi_child
+    original_close = doc_window_mod.close_document_window
+    original_bring = nudge_mod.bring_to_foreground
+
+    closed_hwnd = [None]
+
+    def mock_active_mdi_child(frame_hwnd):
+        assert doc2.Activate_called is True
+        assert doc1.Activate_called is False
+        return 55555
+
+    def mock_close(hwnd):
+        closed_hwnd[0] = hwnd
+        app.Documents._items.remove(doc2)
+
+    doc_window_mod.active_mdi_child = mock_active_mdi_child
+    doc_window_mod.close_document_window = mock_close
+    nudge_mod.bring_to_foreground = lambda hwnd: True
+
+    try:
+        result = bridge.close_document(
+            "field.cdxml", discard_changes=True, index=2)
+        assert result["closed"] == "field.cdxml"
+        assert closed_hwnd[0] == 55555
+        assert doc1 in app.Documents._items
+        assert doc2 not in app.Documents._items
+    finally:
+        doc_window_mod.active_mdi_child = original_active_mdi_child
+        doc_window_mod.close_document_window = original_close
+        nudge_mod.bring_to_foreground = original_bring
+
+
+def test_close_document_stale_index_raises():
+    """A stale index (document list changed since the caller last listed
+    it) must raise a clear error, not silently close the wrong document."""
+    doc1 = FakeDoc("field.cdxml")
+    doc2 = FakeDoc("other.cdxml")
+    app = FakeApp(documents=[doc1, doc2], active_doc=doc1)
+    bridge = _FakeBridge(app)
+
+    from chemdraw_connector.errors import InvalidInputError
+
+    try:
+        # index 2 is "other.cdxml", not "field.cdxml" -- caller's name/index
+        # pair no longer matches reality.
+        bridge.close_document("field.cdxml", discard_changes=True, index=2)
+        assert False, "Should have raised InvalidInputError"
+    except InvalidInputError as e:
+        assert "index 2" in str(e)
+    assert app.Documents.Count == 2

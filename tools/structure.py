@@ -68,10 +68,14 @@ def register(mcp, bridge):
         "folder-then-reopen cycle produces this easily, since `name` is "
         "just the basename), this refuses to guess and errors with each "
         "match's real path -- pass full_name (one of those paths, from "
-        "chemdraw_list_documents' document_details) to pick the right one."))
+        "chemdraw_list_documents' document_details) to pick the right one. "
+        "If even full_name is identical across matches (the exact same "
+        "file open as 2+ separate windows -- a real case, not just "
+        "theoretical), pass index instead (1-based, same order as "
+        "chemdraw_list_documents' own list)."))
     def chemdraw_close_document(name: str, discard_changes: bool = False,
-                                full_name: str = "") -> str:
-        return as_json(bridge.close_document(name, discard_changes, full_name or None))
+                                full_name: str = "", index: int = 0) -> str:
+        return as_json(bridge.close_document(name, discard_changes, full_name or None, index or None))
 
     @mcp.tool()
     def chemdraw_use_scratch_document() -> str:
@@ -149,12 +153,15 @@ def register(mcp, bridge):
         return as_json(bridge.list_documents())
 
     @mcp.tool()
-    def chemdraw_set_active_document(name: str, full_name: str = "") -> str:
+    def chemdraw_set_active_document(name: str, full_name: str = "", index: int = 0) -> str:
         """Switch which open ChemDraw document subsequent tools act on.
         If 2+ open documents share `name` (see chemdraw_list_documents'
         duplicate_names), pass full_name (from document_details) to pick
-        the right one -- this refuses to guess."""
-        return as_json(bridge.set_active_document(name, full_name or None))
+        the right one -- this refuses to guess. If even full_name is
+        identical across matches (the exact same file open as 2+ separate
+        windows), pass index instead (1-based, same order as
+        chemdraw_list_documents' own list)."""
+        return as_json(bridge.set_active_document(name, full_name or None, index or None))
 
     @mcp.tool()
     def chemdraw_get_selection() -> str:

@@ -491,4 +491,13 @@ through here" property is unchanged.
   real `FullName` rather than picking the first, and accepts an optional
   `full_name` to disambiguate (`chemdraw_close_document`/
   `chemdraw_set_active_document`; `chemdraw_list_documents` flags any
-  such name under `duplicate_names`).
+  such name under `duplicate_names`). **`full_name` alone is not always
+  enough** — confirmed live 2026-08-04 against a real session: 2+ open
+  documents can be the exact SAME file opened as separate windows, which
+  makes their `FullName` identical too, not just their `name`. `index`
+  (1-based, matching `chemdraw_list_documents`' own `app.Documents.Item(i)`
+  order) is the last-resort disambiguator for that case. The post-close
+  poll (waiting for `Documents.Count` to actually reflect the close)
+  switched from a by-name/by-FullName "is it still there" check to a
+  plain count comparison for the same reason — identity-based polling has
+  the identical ambiguity problem one layer down.

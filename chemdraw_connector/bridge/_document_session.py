@@ -89,7 +89,7 @@ class _DocumentSession:
                 matches.append(d)
         return matches
 
-    def _resolve_document(self, app, name, full_name=None):
+    def _resolve_document(self, app, name, full_name=None, index=None):
         """Resolve exactly one open document by name, raising a clear
         error rather than silently guessing when `name` alone doesn't
         resolve to exactly one (issue #33: a normal Save-As-to-a-
@@ -98,7 +98,35 @@ class _DocumentSession:
         not the full path, so this is common, not exotic). full_name (an
         absolute path, as returned by chemdraw_list_documents'
         document_details[].full_name) disambiguates when there's more
-        than one match."""
+        than one match.
+
+        index (1-based, matching chemdraw_list_documents' own ordering --
+        the same app.Documents.Item(i) COM order every lookup in this file
+        already uses) is the LAST-RESORT disambiguator, for the real case
+        full_name can't cover: the exact same file opened as 2+ separate
+        document windows (confirmed live 2026-08-04 -- Save-As/reopen
+        duplicates aren't always DIFFERENT files with the same basename,
+        sometimes it's the identical path opened twice, which makes
+        full_name identical across every match too)."""
+        if index is not None:
+            try:
+                d = app.Documents.Item(index)
+            except Exception:
+                raise InvalidInputError(
+                    f"No open document at index {index} (1-based). "
+                    f"chemdraw_list_documents currently shows "
+                    f"{app.Documents.Count} open documents, in that same "
+                    "order -- it may have changed since you last called it; "
+                    "re-list and retry."
+                ) from None
+            if d.name != name:
+                raise InvalidInputError(
+                    f"Document at index {index} is now named {d.name!r}, "
+                    f"not {name!r} -- the open-document list has changed "
+                    "since you last called chemdraw_list_documents. "
+                    "Re-list and retry."
+                )
+            return d
         matches = self._find_documents_by_name(app, name)
         if not matches:
             raise ChemDrawError(
@@ -109,35 +137,34 @@ class _DocumentSession:
             return matches[0]
         if full_name:
             target_abspath = os.path.normcase(os.path.abspath(full_name))
+            full_matches = []
             for d in matches:
                 try:
                     if os.path.normcase(os.path.abspath(d.FullName)) == target_abspath:
-                        return d
+                        full_matches.append(d)
                 except Exception:
                     continue
-            raise InvalidInputError(
-                f"{len(matches)} open documents are named {name!r}, but none "
-                f"has full_name {full_name!r}. Their actual paths: "
-                f"{[getattr(d, 'FullName', None) for d in matches]}"
-            )
+            if len(full_matches) == 1:
+                return full_matches[0]
+            if not full_matches:
+                raise InvalidInputError(
+                    f"{len(matches)} open documents are named {name!r}, but "
+                    f"none has full_name {full_name!r}. Their actual paths: "
+                    f"{[getattr(d, 'FullName', None) for d in matches]}"
+                )
+            # 2+ open documents are the SAME file (identical FullName) --
+            # full_name genuinely cannot tell them apart; fall through to
+            # the index-based error below instead of guessing.
+            matches = full_matches
         raise InvalidInputError(
             f"{len(matches)} open documents are named {name!r} -- ambiguous. "
             "Pass full_name (the absolute path -- see chemdraw_list_documents' "
-            f"document_details) to pick one. Their actual paths: "
+            "document_details) to narrow it down, and if 2+ of those also "
+            "share the identical full_name (the same file open more than "
+            "once), pass index instead (1-based, same order as "
+            f"chemdraw_list_documents' own list). Their actual paths: "
             f"{[getattr(d, 'FullName', None) for d in matches]}"
         )
-
-    @staticmethod
-    def _same_document_full_name(doc, full_name):
-        """Whether `doc`'s own FullName matches the given absolute path --
-        the identity check the post-close poll uses, since checking by
-        `.name` alone can never detect a successful close when another
-        open document shares that name (issue #33)."""
-        try:
-            return (os.path.normcase(os.path.abspath(doc.FullName))
-                   == os.path.normcase(os.path.abspath(full_name)))
-        except Exception:
-            return False
 
     @staticmethod
     def _same_document(a, b):
@@ -159,7 +186,7 @@ class _DocumentSession:
         except Exception:
             return False
 
-    def close_document(self, name, discard_changes=False, full_name=None):
+    def close_document(self, name, discard_changes=False, full_name=None, index=None):
         """Close one open document by name -- IChemDrawDocument.Close() is
         a confirmed no-op over COM, so this goes around it via a Win32
         WM_CLOSE posted straight to that document's own MDI child window
@@ -178,18 +205,22 @@ class _DocumentSession:
         to-a-different-folder-then-reopen cycle produces this easily, since
         `.name` is just the basename), this refuses to guess and raises an
         error listing their actual paths; pass full_name (from
-        chemdraw_list_documents' document_details) to pick the right one."""
-        return self._run(lambda: self._close_document_now(name, discard_changes, full_name),
+        chemdraw_list_documents' document_details) to pick the right one.
+        If even full_name is identical across matches (the same file open
+        as 2+ separate windows -- confirmed live 2026-08-04, not just a
+        theoretical case), pass index instead (1-based, same order as
+        chemdraw_list_documents' own list)."""
+        return self._run(lambda: self._close_document_now(name, discard_changes, full_name, index),
                          timeout=SLOW_TIMEOUT, op_name="close_document", op_description=f"close document {name}")
 
-    def _close_document_now(self, name, discard_changes=False, full_name=None):
+    def _close_document_now(self, name, discard_changes=False, full_name=None, index=None):
         """The actual close logic (worker thread only) -- a plain method,
         not wrapped in self._run itself, so edit_stoichiometry_table can
         call it synchronously from inside its own worker callback to
         auto-close a stale throwaway window without re-entering the
         worker (see that method's own docstring)."""
         app = self._conn.app()
-        target = self._resolve_document(app, name, full_name)
+        target = self._resolve_document(app, name, full_name, index)
         if target.Modified and not discard_changes:
             raise InvalidInputError(
                 f"{name!r} has unsaved changes. Save it first "
@@ -226,32 +257,28 @@ class _DocumentSession:
                 "(IChemDrawDocument.Close() itself is a confirmed "
                 "no-op over COM on this ChemDraw version)."
             )
-        # Captured BEFORE the close for the poll below -- checking by
-        # `name` alone would never turn False if another open document
-        # shares it (issue #33), so identity here must track the SPECIFIC
-        # document just closed, not just its name.
-        try:
-            target_full_name = target.FullName
-        except Exception:
-            target_full_name = None
+        # Captured BEFORE the close for the poll below. Polling by identity
+        # ("is the document we closed gone") doesn't work in general here:
+        # checking by `name` alone never turns False if another open
+        # document shares it, and checking by FullName has the exact same
+        # problem when 2+ documents are the SAME file open twice (issue
+        # #33 -- confirmed live, not just theoretical, see index's own
+        # docstring on _resolve_document). We already targeted the close
+        # at a specific, unambiguous hwnd above (via active_mdi_child) --
+        # this poll's real job is just "wait for ChemDraw to finish
+        # processing that close", which a simple count check answers
+        # without needing identity at all.
+        count_before = app.Documents.Count
         doc_window.close_document_window(hwnd)
 
         for _ in range(30):
             time.sleep(0.1)
-            if target_full_name:
-                still_open = any(
-                    self._same_document_full_name(app.Documents.Item(i), target_full_name)
-                    for i in range(1, app.Documents.Count + 1))
-            else:
-                still_open = any(
-                    app.Documents.Item(i).name == name
-                    for i in range(1, app.Documents.Count + 1))
-            if not still_open:
+            if app.Documents.Count < count_before:
                 break
         else:
             raise ChemDrawError(
-                f"Sent a close request for {name!r} but it still shows "
-                "up in Documents after waiting 3s -- check the ChemDraw "
+                f"Sent a close request for {name!r} but Documents.Count "
+                "did not drop after waiting 3s -- check the ChemDraw "
                 "window by hand; it may be showing an unexpected dialog."
             )
 
@@ -648,10 +675,10 @@ class _DocumentSession:
             }
         return self._run(go, op_name="list_documents", op_description="list open documents")
 
-    def set_active_document(self, name, full_name=None):
+    def set_active_document(self, name, full_name=None, index=None):
         def go():
             app = self._conn.app()
-            target = self._resolve_document(app, name, full_name)
+            target = self._resolve_document(app, name, full_name, index)
             target.Activate()
             nudge.bring_to_foreground(self._conn.hwnd)
             return {"active_document": target.name}
