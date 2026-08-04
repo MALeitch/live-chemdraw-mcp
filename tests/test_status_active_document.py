@@ -65,7 +65,7 @@ class _FakeStatusBridge(plumbing._Plumbing, ds._DocumentSession):
         self._doc_name = tracked_name
         self._caches = {}
 
-    def _run(self, fn, timeout=None):
+    def _run(self, fn, timeout=None, op_name=None, op_description=None):
         return fn()
 
     def _graphics_boxes(self, doc):

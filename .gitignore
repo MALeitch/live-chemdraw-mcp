@@ -7,7 +7,16 @@ __pycache__/
 # Internal development docs -- kept locally, not shipped in the public repo.
 /DEBUG_REPORT.md
 /ROADMAP.md
+/HANDOFF*.md
+/docs/history/
 
 # Scratch marketing-image test output from live ChemDraw sessions --
 # personal working files, not shipped in the public repo.
 /marketing/
+
+# Working prototypes referenced from the (untracked) dev docs above --
+# reference material for whoever picks up the roadmap next, not shipped code.
+/prototypes/
+
+# Unrelated local tool data that ended up inside the repo directory.
+/.hermes/

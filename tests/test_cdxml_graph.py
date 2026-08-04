@@ -93,3 +93,68 @@ def test_parse_element_matches_parse_on_same_content():
     from_element = cdxml_graph.parse_element(fragment)
     from_text = cdxml_graph.parse(CDXML_WITH_NICKNAME)
     assert from_element == from_text
+
+
+# --- bond Display (stereochemistry) -----------------------------------------
+#
+# cdx_binary learned to parse kCDXProp_Bond_Display before cdxml_graph did, so
+# for a while the SAME drawing yielded wedges when read as .cdx and flat bonds
+# when read as .cdxml. Both front ends feed cdxml_document/canvas, so they must
+# agree; the vocabulary here is ChemDraw's own CDXML Display strings, passed
+# through verbatim rather than re-encoded.
+
+CDXML_WITH_STEREO = """<?xml version="1.0" ?>
+<CDXML>
+ <page id="1">
+  <fragment id="10">
+   <n id="11" p="0 0"/>
+   <n id="12" p="30 0"/>
+   <n id="13" p="60 0"/>
+   <n id="14" p="90 0"/>
+   <n id="15" p="120 0"/>
+   <b id="20" B="11" E="12" Display="WedgeBegin"/>
+   <b id="21" B="12" E="13" Display="WedgedHashBegin"/>
+   <b id="22" B="13" E="14" Display="Bold"/>
+   <b id="23" B="14" E="15"/>
+  </fragment>
+ </page>
+</CDXML>
+"""
+
+
+def _displays(text):
+    graph = cdxml_graph.parse(text)
+    return {(b["begin"], b["end"]): b["display"] for b in graph["bonds"]}
+
+
+def test_bond_display_is_parsed_from_cdxml():
+    d = _displays(CDXML_WITH_STEREO)
+    assert d[(11, 12)] == "WedgeBegin"
+    assert d[(12, 13)] == "WedgedHashBegin"
+    assert d[(13, 14)] == "Bold"
+
+
+def test_bond_without_display_reports_none():
+    """Absent Display is an ordinary line; distinct from an explicit Solid."""
+    assert _displays(CDXML_WITH_STEREO)[(14, 15)] is None
+
+
+def test_explicit_solid_is_not_collapsed_to_none():
+    text = CDXML_WITH_STEREO.replace('B="14" E="15"/>', 'B="14" E="15" Display="Solid"/>')
+    assert _displays(text)[(14, 15)] == "Solid"
+
+
+def test_display_survives_nickname_skipping():
+    """The inner-fragment skip must not take the parent's stereo with it."""
+    text = CDXML_WITH_NICKNAME.replace('<b id="11" B="3" E="20"/>',
+                                       '<b id="11" B="3" E="20" Display="WedgeBegin"/>')
+    assert _displays(text)[(3, 20)] == "WedgeBegin"
+
+
+def test_display_matches_the_cdx_parsers_vocabulary():
+    """Both front ends must speak the same strings, not two dialects."""
+    from chemdraw_connector.domain.cdx_binary import BOND_DISPLAY_MAP
+    vocab = set(BOND_DISPLAY_MAP.values())
+    for value in _displays(CDXML_WITH_STEREO).values():
+        if value is not None:
+            assert value in vocab, f"{value!r} is not a Display name cdx_binary emits"

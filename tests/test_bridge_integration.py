@@ -155,7 +155,7 @@ class _FakeBridge(plumbing._Plumbing, ds._DocumentSession, rxn._Reaction, stoich
         # Mock the COM calls that would hit real ChemDraw
         self._simulate_insert = None
 
-    def _run(self, fn, timeout=None):
+    def _run(self, fn, timeout=None, op_name=None, op_description=None):
         return fn()
 
     def _doc(self):

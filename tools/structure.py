@@ -9,7 +9,7 @@ from ._common import TARGET_DOC, as_json
 
 def register(mcp, bridge):
     @mcp.tool()
-    def chemdraw_status() -> str:
+    def chemdraw_status(fast: bool = False) -> str:
         """Check the connection to ChemDraw: which instance/version is attached,
         the active document, and how many real structures (molecules) are on
         the page, plus captions_on_page, boxes_on_page, and a
@@ -29,7 +29,16 @@ def register(mcp, bridge):
         connector's own scratch document is deliberately kept open
         alongside your real one) — falls back to the last document this
         connector actively worked on rather than silently omitting
-        structures_on_page/captions_on_page/boxes_on_page."""
+        structures_on_page/captions_on_page/boxes_on_page.
+        
+        If fast=True, returns only connector-side health state without
+        touching COM: worker thread busy/idle, current operation and elapsed
+        time, ChemDraw process liveness and PID, and whether this connector
+        launched it. This does NOT queue behind any in-flight COM operation
+        and is safe to call during a hang to distinguish "busy" from "dead".
+        """
+        if fast:
+            return as_json(bridge.fast_status())
         return as_json(bridge.status())
 
     @mcp.tool()
@@ -273,16 +282,29 @@ def register(mcp, bridge):
         "an unsupported action against one is reported per-item in "
         "`failed` rather than raised. atom_refs/bond_refs cannot target an "
         "annotation (it has no atoms/bonds); doing so raises a clear error "
-        "naming what target actually resolved to. " + TARGET_DOC))
+        "naming what target actually resolved to. "
+        "de_novo (action='clean' only, default false) picks which of "
+        "ChemDraw's two clean modes runs: false tidies the coordinates "
+        "already drawn, true REGENERATES the layout from the connection "
+        "table. Use de_novo=true to regularise badly drawn structures in "
+        "bulk — measured over 144 real hand-drawn structures, 49 were badly "
+        "drawn as-is, still 13 after the default clean, and 0 after "
+        "de_novo=true; the number of stereo bonds went UP, not down, so it "
+        "does not eat wedges. Do NOT use it on a drawing whose arrangement "
+        "carries meaning — a hand-laid-out reaction scheme, a transition "
+        "state, a deliberately posed conformer — since it discards that "
+        "arrangement entirely. de_novo with any other action is an error, "
+        "not a silent no-op. " + TARGET_DOC))
     def chemdraw_transform(target: str = "selection", action: str = "clean",
                            dx: float = 0, dy: float = 0, degrees: float = 0,
                            factor: float = 1.0, vertical: bool = False,
                            atom_refs: list[str] | None = None,
-                           bond_refs: list[str] | None = None) -> str:
+                           bond_refs: list[str] | None = None,
+                           de_novo: bool = False) -> str:
         return as_json(bridge.transform(_parse(target), action, dx=dx, dy=dy,
                                         degrees=degrees, factor=factor,
                                         vertical=vertical, atom_refs=atom_refs,
-                                        bond_refs=bond_refs))
+                                        bond_refs=bond_refs, de_novo=de_novo))
 
     @mcp.tool(description=(
         "Delete structures from the document. " + TARGET_DOC +

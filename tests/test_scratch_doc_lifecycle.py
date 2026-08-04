@@ -138,7 +138,7 @@ class _FakeBridge(plumbing._Plumbing, ds._DocumentSession):
         self._caches = {}
         self._last_backup = None
 
-    def _run(self, fn, timeout=None):
+    def _run(self, fn, timeout=None, op_name=None, op_description=None):
         return fn()
 
     def _doc(self):

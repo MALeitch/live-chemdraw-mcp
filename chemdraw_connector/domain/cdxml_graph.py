@@ -99,4 +99,17 @@ def _parse_bond(b):
         "begin": int(begin),
         "end": int(end),
         "order": _ORDER_MAP.get(b.get("Order", "1"), 1),
+        # Stereochemistry: wedge/hash and friends. Passed through verbatim --
+        # CDXML's own Display strings ARE the vocabulary, and domain/
+        # cdx_binary.BOND_DISPLAY_MAP maps the binary .cdx integer codes onto
+        # exactly these names so both front ends agree. Do not re-encode.
+        #
+        # None means the bond carried no Display attribute (an ordinary line),
+        # which is deliberately distinct from an explicit "Solid".
+        #
+        # Begin/End in these names is DIRECTIONAL -- it says which atom the
+        # narrow point of the wedge sits on, so WedgeBegin and WedgeEnd
+        # describe opposite stereocentres. Anything reordering bond endpoints
+        # has to carry this along or it silently inverts the chemistry.
+        "display": b.get("Display"),
     }

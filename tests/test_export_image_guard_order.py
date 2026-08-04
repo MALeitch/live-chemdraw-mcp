@@ -55,7 +55,7 @@ class _StubBridge(structio._StructureIO):
     def _cache_for(self, doc):
         return {}
 
-    def _run(self, fn, timeout=None):
+    def _run(self, fn, timeout=None, op_name=None, op_description=None):
         return fn()
 
     @staticmethod

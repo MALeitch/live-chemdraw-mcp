@@ -11,7 +11,7 @@ import pywintypes
 from .. import snapshots, state, targets
 from ..com import nudge
 from ..com import types as t
-from ..com.connection import Connection, is_dead_proxy
+from ..com.connection import PROG_ID, Connection, is_dead_proxy
 from ..com.worker import ComWorker, DEFAULT_TIMEOUT
 from ..domain import enumeration, wrapper_detection
 from ..errors import ChemDrawError, InvalidInputError, UnexpectedConnectorError
@@ -82,7 +82,7 @@ class _Plumbing:
         Runs off the COM worker thread via pure Win32 — see com/nudge.py."""
         return bool(nudge.nudge_escape(self._conn.hwnd))
 
-    def _run(self, fn, timeout=DEFAULT_TIMEOUT):
+    def _run(self, fn, timeout=DEFAULT_TIMEOUT, op_name=None, op_description=None):
         def wrapped():
             try:
                 return fn()
@@ -117,13 +117,85 @@ class _Plumbing:
                 # server-side debugging even though the client only sees the
                 # friendly message.
                 raise UnexpectedConnectorError(exc) from exc
-        return self._worker.submit(wrapped, timeout=timeout)
+        return self._worker.submit(wrapped, timeout=timeout, op_name=op_name, op_description=op_description)
 
     @staticmethod
     def _explain(exc):
         parts = [str(p) for p in (exc.excepinfo or []) if isinstance(p, str) and p]
         detail = "; ".join(parts) or exc.strerror or str(exc)
         return f"ChemDraw rejected the operation: {detail}"
+
+    def fast_status(self):
+        """Connector-side health state that NEVER dispatches to COM.
+
+        Answers: is the worker busy, with which operation, started how long
+        ago; plus process liveness, PID, and launched_by_connector.
+
+        The whole point is that this answers WHILE a COM call is in flight —
+        that is the moment you need to tell "busy since 12 minutes ago" from
+        "dead". So every field here must come from in-process state or plain
+        Win32, never from the Application proxy.
+
+        In particular this must NOT call `self._conn.info()`: that reads
+        `app.FullName`, which is a COM property get, which blocks on a busy
+        STA exactly like everything else. An earlier version did, which made
+        this call useless in precisely the situation it exists for.
+
+        PID comes from the cached `hwnd` via GetWindowThreadProcessId — a
+        Win32 call, unaffected by a blocked COM queue, which is why
+        Connection caches that handle in the first place. That also makes the
+        PID unambiguous when more than one ChemDraw is running: it is the
+        window of the instance we are actually attached to, not merely the
+        first process whose image name matches. That distinction matters —
+        a second instance may hold unsaved user work, and this is the field
+        a caller consults before deciding whether killing is safe.
+
+        Every probe is individually guarded: a status call that raises during
+        a wedge is no more useful than one that blocks.
+        """
+        worker = {"busy": None, "current_operation": None, "error": None}
+        try:
+            worker["busy"] = self._worker.is_busy()
+            worker["current_operation"] = self._worker.get_current_operation()
+        except Exception as exc:                      # pragma: no cover
+            worker["error"] = f"{type(exc).__name__}: {exc}"
+
+        hwnd = getattr(self._conn, "hwnd", None)
+        pid, process_alive, exe_path = None, None, None
+        try:
+            if hwnd:
+                import win32process
+                _tid, pid = win32process.GetWindowThreadProcessId(int(hwnd))
+        except Exception:
+            pid = None
+        if pid:
+            try:
+                import psutil
+                process_alive = psutil.pid_exists(pid)
+                if process_alive:
+                    try:
+                        exe_path = psutil.Process(pid).exe()
+                    except Exception:
+                        exe_path = None
+            except Exception:
+                process_alive = None
+
+        return {
+            "worker": worker,
+            "chem_draw": {
+                "process_alive": process_alive,
+                "pid": pid,
+                "hwnd": hwnd,
+                # False here means a ChemDraw we attached to rather than
+                # started: it may hold documents we never opened.
+                "launched_by_connector": getattr(self._conn, "launched", False),
+                "executable": exe_path,
+            },
+            "connection": {
+                "prog_id": PROG_ID,
+            },
+            "tracked_document": self._doc_name,
+        }
 
     def _doc(self):
         """The working document. Worker thread only.

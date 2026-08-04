@@ -69,7 +69,7 @@ class _DocumentSession:
                         {"box_index": None, "structure_count": unboxed})
                 info["chemical_warnings"] = doc.NumChemicalWarnings
             return info
-        return self._run(go)
+        return self._run(go, op_name="status", op_description="status check")
 
     def new_document(self):
         def go():
@@ -77,7 +77,7 @@ class _DocumentSession:
             doc.Activate()
             nudge.bring_to_foreground(self._conn.hwnd)
             return {"active_document": doc.name}
-        return self._run(go)
+        return self._run(go, op_name="new_document", op_description="create new document")
 
     def close_document(self, name, discard_changes=False):
         """Close one open document by name -- IChemDrawDocument.Close() is
@@ -94,7 +94,7 @@ class _DocumentSession:
         because Modified is cleared BEFORE the close, which is what
         suppresses that prompt from appearing in the first place)."""
         return self._run(lambda: self._close_document_now(name, discard_changes),
-                         timeout=SLOW_TIMEOUT)
+                         timeout=SLOW_TIMEOUT, op_name="close_document", op_description=f"close document {name}")
 
     def _close_document_now(self, name, discard_changes=False):
         """The actual close logic (worker thread only) -- a plain method,
@@ -247,7 +247,7 @@ class _DocumentSession:
             self._doc_name = doc.name
             entry["active_document"] = doc.name
             return entry
-        return self._run(go, timeout=SLOW_TIMEOUT)
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="use_scratch_document", op_description="acquire scratch document")
 
     def convert_cdx_cdxml(self, input_path, output_path, overwrite=False):
         """Convert a file between .cdx/.cdxml (or any other ChemDraw-
@@ -363,6 +363,48 @@ class _DocumentSession:
                     "Pass the path to the document itself."
                 )
             app = self._conn.app()
+            
+            # Check if this path is already open in ChemDraw
+            target_abspath = os.path.normcase(os.path.abspath(path))
+            reused_open_document = False
+            existing_doc = None
+            for i in range(1, app.Documents.Count + 1):
+                cand = app.Documents.Item(i)
+                try:
+                    cand_path = os.path.normcase(os.path.abspath(cand.FullName))
+                    if cand_path == target_abspath:
+                        existing_doc = cand
+                        reused_open_document = True
+                        break
+                except Exception:
+                    continue
+            
+            if existing_doc is not None:
+                # Document is already open — re-activate it instead of re-opening
+                existing_doc.Activate()
+                nudge.bring_to_foreground(self._conn.hwnd)
+                
+                # Compare on-disk mtime with a rough "loaded-at" proxy
+                # (we don't have a direct loaded-at timestamp, but we can
+                # compare file mtime to current time as a signal)
+                try:
+                    disk_mtime = os.path.getmtime(path)
+                    # We can't know exactly when it was loaded, but returning
+                    # the disk mtime lets the caller decide if a reload is needed
+                    # by comparing with their own save time
+                    return {
+                        "active_document": existing_doc.name,
+                        "path": path,
+                        "reused_open_document": True,
+                        "disk_mtime": disk_mtime,
+                    }
+                except Exception:
+                    return {
+                        "active_document": existing_doc.name,
+                        "path": path,
+                        "reused_open_document": True,
+                    }
+            
             count_before = app.Documents.Count
             doc = app.Documents.Open(path)
             if doc is None:
@@ -378,8 +420,8 @@ class _DocumentSession:
                 doc = self._resolve_opened_document(app, path, count_before)
             doc.Activate()
             nudge.bring_to_foreground(self._conn.hwnd)
-            return {"active_document": doc.name, "path": path}
-        return self._run(go, timeout=SLOW_TIMEOUT)
+            return {"active_document": doc.name, "path": path, "reused_open_document": False}
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="open_document", op_description=f"open {path}")
 
     @staticmethod
     def _resolve_opened_document(app, path, count_before):
@@ -416,7 +458,7 @@ class _DocumentSession:
             else:
                 doc.Save()
             return {"saved": True, "path": path or doc.FullName}
-        return self._run(go, timeout=SLOW_TIMEOUT)
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="save_document", op_description=f"save document")
 
     @staticmethod
     def _guard_save_path(doc, path, overwrite):
@@ -469,10 +511,10 @@ class _DocumentSession:
             )
 
     def undo(self):
-        return self._run(lambda: (self._doc().Undo(), {"ok": True})[1])
+        return self._run(lambda: (self._doc().Undo(), {"ok": True})[1], op_name="undo", op_description="undo")
 
     def redo(self):
-        return self._run(lambda: (self._doc().Redo(), {"ok": True})[1])
+        return self._run(lambda: (self._doc().Redo(), {"ok": True})[1], op_name="redo", op_description="redo")
 
     def list_documents(self):
         def go():
@@ -488,7 +530,7 @@ class _DocumentSession:
                 ],
                 "active": self._active_document_name(app),
             }
-        return self._run(go)
+        return self._run(go, op_name="list_documents", op_description="list open documents")
 
     def set_active_document(self, name):
         def go():
@@ -503,4 +545,4 @@ class _DocumentSession:
                 f"No open document named {name!r}. Open documents: "
                 f"{[app.Documents.Item(i).name for i in range(1, app.Documents.Count + 1)]}"
             )
-        return self._run(go)
+        return self._run(go, op_name="set_active_document", op_description=f"set active document {name}")

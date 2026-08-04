@@ -84,7 +84,7 @@ class _StructureIO:
             # stale Groups/Atoms/Bonds counts for one call as a result.
             nudge.bring_to_foreground(self._conn.hwnd)
             return result
-        return self._run(go, timeout=SLOW_TIMEOUT)
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="insert_structure", op_description=f"insert {fmt}")
 
     def export_structure(self, fmt="molfile", target="selection"):
         def go():
@@ -99,7 +99,7 @@ class _StructureIO:
                     "data": _com_text(data),
                 })
             return {"format": fmt, "structures": out}
-        return self._run(go, timeout=SLOW_TIMEOUT)
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="export_structure", op_description=f"export {fmt}")
 
     def export_cdxml(self, path, target="document", overwrite=False):
         def go():
@@ -128,7 +128,7 @@ class _StructureIO:
                 fh.write(text)
             return {"path": path, "bytes": len(text.encode("utf-8")),
                     "target": target}
-        return self._run(go, timeout=SLOW_TIMEOUT)
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="export_cdxml", op_description=f"export cdxml")
 
     def import_molfile(self, path, target="scratch"):
         """Insert every record from a .mol/.sdf file. Not itself wrapped in
@@ -252,7 +252,7 @@ class _StructureIO:
                     fh.write(data)
                 return {"path": path, "bytes": len(data)}
             return {"format": fmt, "base64": base64.b64encode(data).decode()}
-        return self._run(go, timeout=SLOW_TIMEOUT)
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="export_image", op_description=f"export {fmt}")
 
     def _preview_png(self, doc):
         """Small whole-document preview for visual review; worker thread."""
@@ -278,4 +278,4 @@ class _StructureIO:
                 u.Selected = True
             doc.Selection.Objects.Copy()
             return {"copied": [targets.ensure_id(u) for u in units]}
-        return self._run(go)
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="copy_to_clipboard", op_description="copy to clipboard")

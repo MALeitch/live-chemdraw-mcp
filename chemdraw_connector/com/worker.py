@@ -8,6 +8,7 @@ subsequent submissions fail fast until the stuck call finally returns.
 """
 import queue
 import threading
+import time
 from concurrent.futures import Future
 
 from ..errors import ChemDrawBlockedError
@@ -26,6 +27,9 @@ class ComWorker:
         # break ChemDraw out of an interactive block. Returns truthy if it
         # did something worth waiting a moment longer for.
         self._unblock_hook = unblock_hook
+        # Operation tracking for non-blocking status
+        self._current_op = None  # {"name": str, "start_time": float, "description": str}
+        self._op_lock = threading.Lock()
 
     def _ensure_thread(self):
         with self._lock:
@@ -40,18 +44,24 @@ class ComWorker:
 
         pythoncom.CoInitialize()
         while True:
-            fn, future = self._queue.get()
+            fn, future, op_info = self._queue.get()
             if not future.set_running_or_notify_cancel():
                 continue
+            # Set current operation
+            with self._op_lock:
+                self._current_op = op_info
             try:
                 future.set_result(fn())
             except BaseException as exc:  # noqa: BLE001 — must reach the caller
                 future.set_exception(exc)
             finally:
+                # Clear current operation
+                with self._op_lock:
+                    self._current_op = None
                 # Completing anything proves the thread is alive again.
                 self._wedged.clear()
 
-    def submit(self, fn, timeout=DEFAULT_TIMEOUT):
+    def submit(self, fn, timeout=DEFAULT_TIMEOUT, op_name=None, op_description=None):
         """Run fn() on the COM thread and return its result.
 
         On timeout, tries to nudge ChemDraw out of an interactive block (e.g.
@@ -71,7 +81,12 @@ class ComWorker:
             )
         self._ensure_thread()
         future = Future()
-        self._queue.put((fn, future))
+        op_info = {
+            "name": op_name or "unknown",
+            "start_time": time.time(),
+            "description": op_description or "",
+        }
+        self._queue.put((fn, future, op_info))
         try:
             return future.result(timeout=timeout)
         except TimeoutError:
@@ -110,3 +125,21 @@ class ComWorker:
             return bool(self._unblock_hook())
         except Exception:
             return False
+
+    def get_current_operation(self):
+        """Return info about the currently running operation, or None if idle.
+        
+        Returns a dict with: name, start_time, description, elapsed (seconds).
+        Does not block or touch COM - reads only in-process state.
+        """
+        with self._op_lock:
+            if self._current_op is None:
+                return None
+            op = self._current_op.copy()
+            op["elapsed"] = time.time() - op["start_time"]
+            return op
+
+    def is_busy(self):
+        """Return True if worker is currently processing an operation."""
+        with self._op_lock:
+            return self._current_op is not None
