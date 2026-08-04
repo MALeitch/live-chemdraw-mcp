@@ -197,6 +197,125 @@ class _Plumbing:
             "tracked_document": self._doc_name,
         }
 
+    def reset_connection(self, kill_process=False, confirm=False):
+        """Recover from a genuinely stuck COM call (issue #30) WITHOUT
+        restarting this connector's own process.
+
+        Background: a native COM call blocked inside ChemDraw cannot be
+        interrupted from Python — there is no safe way to abort a thread
+        mid-syscall. Once the worker's one dedicated STA thread is stuck
+        inside such a call, it can NEVER return to its queue to pick up
+        new work (see com/worker.py's own docstring), so every future
+        call fails fast forever with "a previous call is still waiting on
+        ChemDraw" — confirmed live 2026-08-04 that this genuinely never
+        self-heals. Until now the only recovery was restarting the whole
+        MCP server process.
+
+        This works instead by simply ABANDONING the stuck worker/
+        connection (its thread is daemon=True, so it never blocks process
+        exit; if the stuck call ever does complete in the background,
+        its result is just never read — the same "may still land later"
+        caveat ChemDrawBlockedError already documents) and building a
+        FRESH ComWorker + Connection for every call from here on.
+
+        kill_process=False (the default): only the connector's OWN link
+        is reset — it attempts to reattach to the SAME still-running
+        ChemDraw process (GetActiveObject, same as any normal reconnect).
+        If the stuck call was some client-side channel oddity rather than
+        ChemDraw's own UI thread genuinely being busy, this recovers with
+        ZERO disruption: no window closed, nothing unsaved lost. If
+        ChemDraw's own internal thread really is the thing that's stuck,
+        this reattach attempt will itself likely time out too (reported
+        under `reconnect_error`, not raised) — that's the signal to retry
+        with kill_process=True.
+
+        kill_process=True: also kills the ChemDraw.exe process (by the
+        EXACT pid this connector is attached to — the same pid
+        chemdraw_status(fast=true) reports, avoiding the "which ChemDraw"
+        ambiguity hazard when 2+ instances are running) before building
+        the fresh connection, which then launches a new instance.
+        DESTRUCTIVE: closes every open ChemDraw window, discarding any
+        unsaved changes not already on disk. Recent automatic backups
+        live under `snapshots.BACKUP_DIR`.
+
+        Requires confirm=True (this is a destructive, not-fully-
+        reversible action — the abandoned operation's true outcome
+        becomes unknowable, and kill_process additionally destroys
+        unsaved state)."""
+        if not confirm:
+            raise InvalidInputError(
+                "reset_connection abandons whatever operation is "
+                "currently in flight (its effects, if any, may still "
+                "land on the canvas later with nobody watching), and "
+                "with kill_process=true also closes every open ChemDraw "
+                "window, losing any unsaved changes not already on disk "
+                f"(recent automatic backups: {snapshots.BACKUP_DIR}). "
+                "Pass confirm=true to proceed."
+            )
+        was_busy = self._worker.is_busy()
+        if not was_busy:
+            raise InvalidInputError(
+                "The worker is not currently busy — there is nothing to "
+                "reset. Use chemdraw_status(fast=true) first to confirm "
+                "a call is genuinely stuck (worker.busy=true with "
+                "current_operation.elapsed climbing across repeated "
+                "checks) before calling this."
+            )
+        stuck_operation = self._worker.get_current_operation()
+
+        killed_pid = None
+        if kill_process:
+            hwnd = getattr(self._conn, "hwnd", None)
+            pid = None
+            try:
+                if hwnd:
+                    import win32process
+                    _tid, pid = win32process.GetWindowThreadProcessId(int(hwnd))
+            except Exception:
+                pid = None
+            if not pid:
+                raise ChemDrawError(
+                    "Could not determine the ChemDraw process id to kill "
+                    "(no cached window handle on this connection) — the "
+                    "stuck worker was NOT reset. Kill it by hand via Task "
+                    "Manager, then retry with kill_process=false to just "
+                    "reattach."
+                )
+            try:
+                import psutil
+                psutil.Process(pid).kill()
+                killed_pid = pid
+            except Exception as exc:
+                raise ChemDrawError(
+                    f"Could not kill ChemDraw process {pid}: {exc}. The "
+                    "stuck worker was NOT reset — retry, or kill it by "
+                    "hand via Task Manager and call this again with "
+                    "kill_process=false to just reattach."
+                ) from exc
+
+        # Abandon the wedged worker/connection outright — see docstring.
+        self._conn = Connection()
+        self._worker = ComWorker(unblock_hook=self._nudge_chemdraw)
+        self._doc_name = None  # the new connection has no tracked document yet
+
+        reconnect_error = None
+        info = None
+        try:
+            info = self._run(
+                lambda: self._conn.info(), timeout=DEFAULT_TIMEOUT,
+                op_name="reset_connection", op_description="reconnect after reset")
+        except Exception as exc:
+            reconnect_error = str(exc)
+
+        return {
+            "reset": True,
+            "killed_process": killed_pid,
+            "abandoned_operation": stuck_operation,
+            "reconnected": info is not None,
+            "connection": info,
+            "reconnect_error": reconnect_error,
+        }
+
     def _doc(self):
         """The working document. Worker thread only.
 

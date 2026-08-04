@@ -41,6 +41,30 @@ def register(mcp, bridge):
             return as_json(bridge.fast_status())
         return as_json(bridge.status())
 
+    @mcp.tool(description=(
+        "Recover from a genuinely stuck COM call WITHOUT restarting the "
+        "whole connector process. Use chemdraw_status(fast=true) FIRST to "
+        "confirm a call is truly stuck (worker.busy=true with "
+        "current_operation.elapsed climbing across repeated checks, not "
+        "just slow) -- this call fails if the worker isn't currently busy, "
+        "since there would be nothing to reset. Once a call is genuinely "
+        "stuck it can never self-heal (no safe way to interrupt a thread "
+        "mid-syscall), so every future call would otherwise fail forever "
+        "with 'a previous call is still waiting on ChemDraw'. "
+        "kill_process=false (default, try this first): reattaches to the "
+        "SAME still-running ChemDraw process with a fresh connection -- "
+        "if the stuck call wasn't ChemDraw's own UI thread genuinely being "
+        "busy, this recovers with ZERO disruption (no window closed, "
+        "nothing unsaved lost); check `reconnected` in the result. "
+        "kill_process=true: also kills and relaunches the ChemDraw "
+        "process -- DESTRUCTIVE, closes every open window and loses any "
+        "unsaved changes not already on disk (recent automatic backups "
+        "exist, see the connector's backup directory). Requires "
+        "confirm=true either way, since the abandoned operation's true "
+        "outcome becomes unknowable."))
+    def chemdraw_reset_connection(confirm: bool = False, kill_process: bool = False) -> str:
+        return as_json(bridge.reset_connection(kill_process, confirm))
+
     @mcp.tool()
     def chemdraw_new_document() -> str:
         """Create a new empty ChemDraw document and make it active.

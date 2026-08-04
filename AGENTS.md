@@ -483,6 +483,26 @@ through here" property is unchanged.
   `doc.Bonds`, bucketed by fragment tag, paid at most once for however
   many units are cache-cold (cache-warm units are served from cache
   either way, at the same cost as the per-unit function).
+- **Once the COM worker's one dedicated STA thread is stuck inside a
+  blocking native call, it can NEVER recover on its own** — a blocked
+  call can't be interrupted from Python (no safe way to abort a thread
+  mid-syscall), so the thread never returns to its own queue to pick up
+  new work (`com/worker.py`'s `_run` loop is a single `while True: fn, ...
+  = self._queue.get(); ...; future.set_result(fn())` — if that `fn()`
+  call never returns, that's it, forever). Confirmed live 2026-08-04:
+  this genuinely never self-heals, even after the underlying ChemDraw
+  process is separately killed and relaunched by hand — every future
+  call still fails fast with "a previous call is still waiting on
+  ChemDraw." Previously the only fix was restarting the whole connector
+  process. `bridge.reset_connection(kill_process, confirm)`
+  (`chemdraw_reset_connection`) fixes this without a process restart: it
+  simply abandons the wedged `ComWorker`/`Connection` (the orphaned
+  thread is `daemon=True`, never blocks process exit) and builds a fresh
+  pair. `kill_process=False` just reattaches to the same still-running
+  ChemDraw — recovers with zero disruption if the stall wasn't ChemDraw's
+  own UI thread being genuinely busy; `kill_process=True` also kills (by
+  the exact attached pid, avoiding the multi-instance ambiguity hazard)
+  and relaunches ChemDraw for a genuine internal wedge.
 - `IChemDrawDocument.name` is just the basename, not the full path — two
   open documents with the same filename in different folders (a normal
   Save-As-to-a-different-folder-then-reopen cycle) is common, not exotic,
