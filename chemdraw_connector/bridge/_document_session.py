@@ -79,7 +79,87 @@ class _DocumentSession:
             return {"active_document": doc.name}
         return self._run(go, op_name="new_document", op_description="create new document")
 
-    def close_document(self, name, discard_changes=False):
+    def _find_documents_by_name(self, app, name):
+        """Every open document whose `.name` matches, in COM collection
+        order -- may be more than one (see _resolve_document)."""
+        matches = []
+        for i in range(1, app.Documents.Count + 1):
+            d = app.Documents.Item(i)
+            if d.name == name:
+                matches.append(d)
+        return matches
+
+    def _resolve_document(self, app, name, full_name=None):
+        """Resolve exactly one open document by name, raising a clear
+        error rather than silently guessing when `name` alone doesn't
+        resolve to exactly one (issue #33: a normal Save-As-to-a-
+        different-folder-then-reopen cycle easily produces 2+ open
+        documents sharing one filename -- `.name` is just the basename,
+        not the full path, so this is common, not exotic). full_name (an
+        absolute path, as returned by chemdraw_list_documents'
+        document_details[].full_name) disambiguates when there's more
+        than one match."""
+        matches = self._find_documents_by_name(app, name)
+        if not matches:
+            raise ChemDrawError(
+                f"No open document named {name!r}. Open documents: "
+                f"{[app.Documents.Item(i).name for i in range(1, app.Documents.Count + 1)]}"
+            )
+        if len(matches) == 1:
+            return matches[0]
+        if full_name:
+            target_abspath = os.path.normcase(os.path.abspath(full_name))
+            for d in matches:
+                try:
+                    if os.path.normcase(os.path.abspath(d.FullName)) == target_abspath:
+                        return d
+                except Exception:
+                    continue
+            raise InvalidInputError(
+                f"{len(matches)} open documents are named {name!r}, but none "
+                f"has full_name {full_name!r}. Their actual paths: "
+                f"{[getattr(d, 'FullName', None) for d in matches]}"
+            )
+        raise InvalidInputError(
+            f"{len(matches)} open documents are named {name!r} -- ambiguous. "
+            "Pass full_name (the absolute path -- see chemdraw_list_documents' "
+            f"document_details) to pick one. Their actual paths: "
+            f"{[getattr(d, 'FullName', None) for d in matches]}"
+        )
+
+    @staticmethod
+    def _same_document_full_name(doc, full_name):
+        """Whether `doc`'s own FullName matches the given absolute path --
+        the identity check the post-close poll uses, since checking by
+        `.name` alone can never detect a successful close when another
+        open document shares that name (issue #33)."""
+        try:
+            return (os.path.normcase(os.path.abspath(doc.FullName))
+                   == os.path.normcase(os.path.abspath(full_name)))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _same_document(a, b):
+        """Best-effort identity check between two IChemDrawDocument COM
+        references. Prefers absolute FullName -- repeated Item()/
+        ActiveDocument calls can return distinct Python wrapper objects
+        for the same underlying COM document, so plain `is`/`==` isn't
+        reliable -- falling back to `.name` only when FullName is empty/
+        unavailable (e.g. an untitled document)."""
+        try:
+            af, bf = a.FullName, b.FullName
+            if af and bf:
+                return (os.path.normcase(os.path.abspath(af))
+                       == os.path.normcase(os.path.abspath(bf)))
+        except Exception:
+            pass
+        try:
+            return a.name == b.name
+        except Exception:
+            return False
+
+    def close_document(self, name, discard_changes=False, full_name=None):
         """Close one open document by name -- IChemDrawDocument.Close() is
         a confirmed no-op over COM, so this goes around it via a Win32
         WM_CLOSE posted straight to that document's own MDI child window
@@ -92,28 +172,24 @@ class _DocumentSession:
         to disk, and there is no way to ask ChemDraw's own "Save changes?"
         prompt to answer for us (see doc_window.py: this only works at all
         because Modified is cleared BEFORE the close, which is what
-        suppresses that prompt from appearing in the first place)."""
-        return self._run(lambda: self._close_document_now(name, discard_changes),
+        suppresses that prompt from appearing in the first place).
+
+        If 2+ open documents share `name` (issue #33 -- a normal Save-As-
+        to-a-different-folder-then-reopen cycle produces this easily, since
+        `.name` is just the basename), this refuses to guess and raises an
+        error listing their actual paths; pass full_name (from
+        chemdraw_list_documents' document_details) to pick the right one."""
+        return self._run(lambda: self._close_document_now(name, discard_changes, full_name),
                          timeout=SLOW_TIMEOUT, op_name="close_document", op_description=f"close document {name}")
 
-    def _close_document_now(self, name, discard_changes=False):
+    def _close_document_now(self, name, discard_changes=False, full_name=None):
         """The actual close logic (worker thread only) -- a plain method,
         not wrapped in self._run itself, so edit_stoichiometry_table can
         call it synchronously from inside its own worker callback to
         auto-close a stale throwaway window without re-entering the
         worker (see that method's own docstring)."""
         app = self._conn.app()
-        target = None
-        for i in range(1, app.Documents.Count + 1):
-            d = app.Documents.Item(i)
-            if d.name == name:
-                target = d
-                break
-        if target is None:
-            raise ChemDrawError(
-                f"No open document named {name!r}. Open documents: "
-                f"{[app.Documents.Item(i).name for i in range(1, app.Documents.Count + 1)]}"
-            )
+        target = self._resolve_document(app, name, full_name)
         if target.Modified and not discard_changes:
             raise InvalidInputError(
                 f"{name!r} has unsaved changes. Save it first "
@@ -122,27 +198,54 @@ class _DocumentSession:
                 "pass discard_changes=true to close without saving."
             )
         was_active = (app.ActiveDocument is not None
-                     and app.ActiveDocument.name == name)
+                     and self._same_document(app.ActiveDocument, target))
         if discard_changes and target.Modified:
             # Must happen BEFORE the close -- see doc_window.py's
             # module docstring on why this is what actually suppresses
             # ChemDraw's own "Save changes?" modal.
             target.Modified = False
 
-        hwnd = doc_window.find_document_window(name, self._conn.hwnd)
+        # Activate the resolved COM object (unambiguous -- a specific
+        # object reference, not a name lookup) and read back WHICH window
+        # ChemDraw itself now considers active via WM_MDIGETACTIVE, rather
+        # than doc_window.find_document_window's title-text search --
+        # title text is ambiguous with duplicate open filenames (issue
+        # #33), but live MDI activation state is not. See doc_window.py's
+        # module docstring for the live confirmation this relies on.
+        target.Activate()
+        nudge.bring_to_foreground(self._conn.hwnd)
+        hwnd = doc_window.active_mdi_child(self._conn.hwnd)
+        if hwnd is None:
+            # Fallback only: weaker (title-text, ambiguous with
+            # duplicates) but better than failing outright if the
+            # MDIClient couldn't be located for some reason.
+            hwnd = doc_window.find_document_window(name, self._conn.hwnd)
         if hwnd is None:
             raise ChemDrawError(
                 f"Could not find {name!r}'s own window to close it "
                 "(IChemDrawDocument.Close() itself is a confirmed "
                 "no-op over COM on this ChemDraw version)."
             )
+        # Captured BEFORE the close for the poll below -- checking by
+        # `name` alone would never turn False if another open document
+        # shares it (issue #33), so identity here must track the SPECIFIC
+        # document just closed, not just its name.
+        try:
+            target_full_name = target.FullName
+        except Exception:
+            target_full_name = None
         doc_window.close_document_window(hwnd)
 
         for _ in range(30):
             time.sleep(0.1)
-            still_open = any(
-                app.Documents.Item(i).name == name
-                for i in range(1, app.Documents.Count + 1))
+            if target_full_name:
+                still_open = any(
+                    self._same_document_full_name(app.Documents.Item(i), target_full_name)
+                    for i in range(1, app.Documents.Count + 1))
+            else:
+                still_open = any(
+                    app.Documents.Item(i).name == name
+                    for i in range(1, app.Documents.Count + 1))
             if not still_open:
                 break
         else:
@@ -519,30 +622,37 @@ class _DocumentSession:
     def list_documents(self):
         def go():
             app = self._conn.app()
+            details = []
+            name_counts = {}
+            for i in range(1, app.Documents.Count + 1):
+                d = app.Documents.Item(i)
+                try:
+                    full_name = d.FullName
+                except Exception:
+                    full_name = None
+                details.append({"name": d.name, "full_name": full_name})
+                name_counts[d.name] = name_counts.get(d.name, 0) + 1
             # See _active_document_name's own docstring: app.ActiveDocument
             # can come back None even with exactly one document open (known-
             # flaky COM property); its sole-survivor fallback covers that
             # case here without forcing window focus on a plain list query.
             return {
-                "documents": [
-                    app.Documents.Item(i).name
-                    for i in range(1, app.Documents.Count + 1)
-                ],
+                "documents": [d["name"] for d in details],
+                "document_details": details,
+                # Names sharing 2+ open documents (issue #33) -- a caller
+                # must pass full_name to chemdraw_close_document/
+                # chemdraw_set_active_document for any name listed here,
+                # since `name` alone is ambiguous.
+                "duplicate_names": sorted(n for n, c in name_counts.items() if c > 1),
                 "active": self._active_document_name(app),
             }
         return self._run(go, op_name="list_documents", op_description="list open documents")
 
-    def set_active_document(self, name):
+    def set_active_document(self, name, full_name=None):
         def go():
             app = self._conn.app()
-            for i in range(1, app.Documents.Count + 1):
-                doc = app.Documents.Item(i)
-                if doc.name == name:
-                    doc.Activate()
-                    nudge.bring_to_foreground(self._conn.hwnd)
-                    return {"active_document": doc.name}
-            raise ChemDrawError(
-                f"No open document named {name!r}. Open documents: "
-                f"{[app.Documents.Item(i).name for i in range(1, app.Documents.Count + 1)]}"
-            )
+            target = self._resolve_document(app, name, full_name)
+            target.Activate()
+            nudge.bring_to_foreground(self._conn.hwnd)
+            return {"active_document": target.name}
         return self._run(go, op_name="set_active_document", op_description=f"set active document {name}")

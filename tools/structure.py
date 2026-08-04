@@ -62,9 +62,16 @@ def register(mcp, bridge):
         "there is no way to answer ChemDraw's own \"Save changes?\" prompt "
         "for it once this starts. If the closed document was the active "
         "one, `new_active_document` reports whichever document ChemDraw "
-        "switched to automatically (MDI default), or null if none remain."))
-    def chemdraw_close_document(name: str, discard_changes: bool = False) -> str:
-        return as_json(bridge.close_document(name, discard_changes))
+        "switched to automatically (MDI default), or null if none remain. "
+        "If 2+ open documents share `name` (chemdraw_list_documents flags "
+        "these under duplicate_names -- a normal Save-As-to-a-different-"
+        "folder-then-reopen cycle produces this easily, since `name` is "
+        "just the basename), this refuses to guess and errors with each "
+        "match's real path -- pass full_name (one of those paths, from "
+        "chemdraw_list_documents' document_details) to pick the right one."))
+    def chemdraw_close_document(name: str, discard_changes: bool = False,
+                                full_name: str = "") -> str:
+        return as_json(bridge.close_document(name, discard_changes, full_name or None))
 
     @mcp.tool()
     def chemdraw_use_scratch_document() -> str:
@@ -132,13 +139,22 @@ def register(mcp, bridge):
 
     @mcp.tool()
     def chemdraw_list_documents() -> str:
-        """List all open ChemDraw documents and which one is active."""
+        """List all open ChemDraw documents and which one is active.
+        document_details gives each one's name + full_name (absolute
+        path); duplicate_names flags any name shared by 2+ open documents
+        (a normal Save-As-to-a-different-folder-then-reopen cycle produces
+        this, since `name` is just the basename) -- pass full_name to
+        chemdraw_close_document/chemdraw_set_active_document to disambiguate
+        any name listed there."""
         return as_json(bridge.list_documents())
 
     @mcp.tool()
-    def chemdraw_set_active_document(name: str) -> str:
-        """Switch which open ChemDraw document subsequent tools act on."""
-        return as_json(bridge.set_active_document(name))
+    def chemdraw_set_active_document(name: str, full_name: str = "") -> str:
+        """Switch which open ChemDraw document subsequent tools act on.
+        If 2+ open documents share `name` (see chemdraw_list_documents'
+        duplicate_names), pass full_name (from document_details) to pick
+        the right one -- this refuses to guess."""
+        return as_json(bridge.set_active_document(name, full_name or None))
 
     @mcp.tool()
     def chemdraw_get_selection() -> str:

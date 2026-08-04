@@ -386,3 +386,150 @@ def test_concurrent_use_scratch_document_calls():
         assert result2["cleared_atoms"] == 3
     finally:
         nudge_mod.bring_to_foreground = original_bring
+
+
+def test_list_documents_flags_duplicate_names():
+    """Issue #33: two open documents with the same basename (different
+    folders) must be surfaced as duplicate_names, with full_name distinguishing
+    them in document_details."""
+    doc1 = FakeDoc("field.cdxml")
+    doc1.FullName = r"C:\iter1\field.cdxml"
+    doc2 = FakeDoc("field.cdxml")
+    doc2.FullName = r"C:\iter2\field.cdxml"
+    doc3 = FakeDoc("other.cdxml")
+
+    app = FakeApp(documents=[doc1, doc2, doc3], active_doc=doc3)
+    bridge = _FakeBridge(app)
+
+    result = bridge.list_documents()
+    assert result["duplicate_names"] == ["field.cdxml"]
+    assert {"name": "field.cdxml", "full_name": r"C:\iter1\field.cdxml"} in result["document_details"]
+    assert {"name": "field.cdxml", "full_name": r"C:\iter2\field.cdxml"} in result["document_details"]
+    assert result["documents"] == ["field.cdxml", "field.cdxml", "other.cdxml"]
+
+
+def test_close_document_ambiguous_name_without_full_name_raises():
+    """Issue #33: closing by a name shared by 2+ open documents must refuse
+    to guess rather than silently picking whichever COM/window match came
+    first."""
+    doc1 = FakeDoc("field.cdxml")
+    doc1.FullName = r"C:\iter1\field.cdxml"
+    doc2 = FakeDoc("field.cdxml")
+    doc2.FullName = r"C:\iter2\field.cdxml"
+
+    app = FakeApp(documents=[doc1, doc2], active_doc=doc1)
+    bridge = _FakeBridge(app)
+
+    from chemdraw_connector.errors import InvalidInputError
+
+    try:
+        bridge.close_document("field.cdxml", discard_changes=True)
+        assert False, "Should have raised InvalidInputError"
+    except InvalidInputError as e:
+        msg = str(e)
+        assert "ambiguous" in msg.lower()
+        assert "iter1" in msg and "iter2" in msg
+    # Neither document was touched.
+    assert app.Documents.Count == 2
+
+
+def test_close_document_disambiguated_by_full_name():
+    """Issue #33: full_name picks the intended document out of 2+ sharing a
+    name, and closes exactly that one (not just whichever the title-text
+    fallback happens to find first)."""
+    doc1 = FakeDoc("field.cdxml")
+    doc1.FullName = r"C:\iter1\field.cdxml"
+    doc2 = FakeDoc("field.cdxml")
+    doc2.FullName = r"C:\iter2\field.cdxml"
+
+    app = FakeApp(documents=[doc1, doc2], active_doc=doc1)
+    bridge = _FakeBridge(app)
+
+    import chemdraw_connector.com.doc_window as doc_window_mod
+    import chemdraw_connector.com.nudge as nudge_mod
+
+    original_active_mdi_child = doc_window_mod.active_mdi_child
+    original_close = doc_window_mod.close_document_window
+    original_bring = nudge_mod.bring_to_foreground
+
+    closed_hwnd = [None]
+
+    def mock_active_mdi_child(frame_hwnd):
+        # Simulate WM_MDIGETACTIVE correctly reporting whichever document
+        # was just COM-Activate()d -- doc2, since that's the one full_name
+        # resolved to.
+        assert doc2.Activate_called is True
+        assert doc1.Activate_called is False
+        return 98765
+
+    def mock_close(hwnd):
+        closed_hwnd[0] = hwnd
+        app.Documents._items.remove(doc2)
+
+    doc_window_mod.active_mdi_child = mock_active_mdi_child
+    doc_window_mod.close_document_window = mock_close
+    nudge_mod.bring_to_foreground = lambda hwnd: True
+
+    try:
+        result = bridge.close_document(
+            "field.cdxml", discard_changes=True, full_name=r"C:\iter2\field.cdxml")
+        assert result["closed"] == "field.cdxml"
+        assert closed_hwnd[0] == 98765
+        # doc1 (the OTHER same-named document) must survive.
+        assert doc1 in app.Documents._items
+        assert doc2 not in app.Documents._items
+    finally:
+        doc_window_mod.active_mdi_child = original_active_mdi_child
+        doc_window_mod.close_document_window = original_close
+        nudge_mod.bring_to_foreground = original_bring
+
+
+def test_set_active_document_ambiguous_name_without_full_name_raises():
+    """Issue #33: same ambiguity guard applies to switching the active
+    document, not just closing."""
+    doc1 = FakeDoc("field.cdxml")
+    doc1.FullName = r"C:\iter1\field.cdxml"
+    doc2 = FakeDoc("field.cdxml")
+    doc2.FullName = r"C:\iter2\field.cdxml"
+
+    app = FakeApp(documents=[doc1, doc2], active_doc=doc1)
+    bridge = _FakeBridge(app)
+
+    from chemdraw_connector.errors import InvalidInputError
+
+    import chemdraw_connector.com.nudge as nudge_mod
+    original_bring = nudge_mod.bring_to_foreground
+    nudge_mod.bring_to_foreground = lambda hwnd: True
+    try:
+        try:
+            bridge.set_active_document("field.cdxml")
+            assert False, "Should have raised InvalidInputError"
+        except InvalidInputError as e:
+            assert "ambiguous" in str(e).lower()
+        assert doc1.Activate_called is False
+        assert doc2.Activate_called is False
+    finally:
+        nudge_mod.bring_to_foreground = original_bring
+
+
+def test_set_active_document_disambiguated_by_full_name():
+    """Issue #33: full_name picks the right one of 2+ same-named documents
+    to activate."""
+    doc1 = FakeDoc("field.cdxml")
+    doc1.FullName = r"C:\iter1\field.cdxml"
+    doc2 = FakeDoc("field.cdxml")
+    doc2.FullName = r"C:\iter2\field.cdxml"
+
+    app = FakeApp(documents=[doc1, doc2], active_doc=doc1)
+    bridge = _FakeBridge(app)
+
+    import chemdraw_connector.com.nudge as nudge_mod
+    original_bring = nudge_mod.bring_to_foreground
+    nudge_mod.bring_to_foreground = lambda hwnd: True
+    try:
+        result = bridge.set_active_document("field.cdxml", full_name=r"C:\iter2\field.cdxml")
+        assert result["active_document"] == "field.cdxml"
+        assert doc2.Activate_called is True
+        assert doc1.Activate_called is False
+    finally:
+        nudge_mod.bring_to_foreground = original_bring

@@ -467,3 +467,28 @@ through here" property is unchanged.
     `doc.Groups`, a TLC plate never inflates `chemdraw_status`/
     `chemdraw_describe_canvas` structure counts — confirmed live, same as
     Brackets/Arrows/Symbols.
+- `IChemDrawDocument.name` is just the basename, not the full path — two
+  open documents with the same filename in different folders (a normal
+  Save-As-to-a-different-folder-then-reopen cycle) is common, not exotic,
+  and any lookup keyed on `name` alone is ambiguous in that state.
+  `com/doc_window.py`'s old title-text window search
+  (`find_document_window`) made this worse: `EnumChildWindows`'s
+  enumeration order has no guaranteed relationship to `app.Documents`'
+  own COM collection order, so it could close a *different* window than
+  the one just identified and Modified-checked via COM. Fix: ChemDraw is
+  a classic MDI app with one `MDIClient` window per `CSWFrame`;
+  `WM_MDIGETACTIVE` sent to it returns the hwnd of whichever `CSWDocument`
+  child is CURRENTLY active — not by matching text, by reading ChemDraw's
+  own live activation state. So `.Activate()` the correct COM Document
+  object first (unambiguous — a specific object reference), bring the
+  frame to the OS foreground, then read back its hwnd via
+  `doc_window.active_mdi_child`. Confirmed live against a real 11-document
+  session with 4 documents sharing one name: activating
+  `chemdraw-mcp-scratch.cdxml` via COM and querying `WM_MDIGETACTIVE`
+  returned exactly that window's hwnd. `bridge/_document_session.py`'s
+  `_resolve_document` additionally refuses to guess when a caller's
+  `name` alone matches 2+ open documents — it raises with every match's
+  real `FullName` rather than picking the first, and accepts an optional
+  `full_name` to disambiguate (`chemdraw_close_document`/
+  `chemdraw_set_active_document`; `chemdraw_list_documents` flags any
+  such name under `duplicate_names`).
