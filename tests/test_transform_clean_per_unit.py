@@ -27,23 +27,28 @@ from chemdraw_connector.errors import InvalidInputError
 class FakeObjects:
     """One structure's own IChemDrawObjects collection."""
 
-    def __init__(self, uid, log, flags, boom=False):
+    def __init__(self, uid, log, flags, boom=False, slow=False):
         self.uid = uid
         self._log = log
         self._flags = flags
         self._boom = boom
+        self._slow = slow
 
     def Clean(self, flag):
         if self._boom:
             raise RuntimeError(f"ChemDraw refused to clean {self.uid}")
+        if self._slow:
+            import time
+            time.sleep(0.05)
         self._log.append(self.uid)
         self._flags.append(flag)
 
 
 class FakeUnit:
-    def __init__(self, uid, boom=False):
+    def __init__(self, uid, boom=False, slow=False):
         self.uid = uid
         self.boom = boom
+        self.slow = slow
 
 
 class FakeManipulation(mp._Manipulation):
@@ -73,7 +78,8 @@ def clean_log(monkeypatch):
         monkeypatch.setattr(
             mp.targets, "unit_objects",
             lambda obj: FakeObjects(obj.uid, log, flags,
-                                    boom=getattr(obj, "boom", False)))
+                                    boom=getattr(obj, "boom", False),
+                                    slow=getattr(obj, "slow", False)))
         return log, flags
 
     return _install
@@ -240,3 +246,62 @@ def test_legacy_positional_callers_stay_on_the_tidy_path():
     mp._Manipulation._apply_transform_action(
         Objs(), "clean", 0.0, 0.0, 0.0, 1.0, False)
     assert seen == [False]
+
+
+# ---------- start/limit/budget (issue #27) ----------
+
+def test_limit_stops_early_and_reports_resume_at(clean_log):
+    log, _ = clean_log(_structures("s1", "s2", "s3", "s4"))
+    res = FakeManipulation().transform(target="document", action="clean", limit=2)
+    assert log == ["s1", "s2"]
+    assert res["transformed"] == ["s1", "s2"]
+    assert res["resume_at"] == 2
+    assert res["processed"] == 2
+    assert res["total"] == 4
+
+
+def test_start_resumes_a_second_call_where_the_first_left_off(clean_log):
+    log, _ = clean_log(_structures("s1", "s2", "s3", "s4"))
+    first = FakeManipulation().transform(target="document", action="clean", limit=2)
+    second = FakeManipulation().transform(
+        target="document", action="clean", start=first["resume_at"], limit=2)
+    assert log == ["s1", "s2", "s3", "s4"]
+    assert second["transformed"] == ["s3", "s4"]
+    assert second["resume_at"] is None
+
+
+def test_resume_at_none_without_limit_or_budget(clean_log):
+    """The existing (pre-#27) callers that never pass start/limit/budget
+    must keep seeing every structure cleaned in one call, resume_at null."""
+    log, _ = clean_log(_structures("s1", "s2", "s3"))
+    res = FakeManipulation().transform(target="document", action="clean")
+    assert log == ["s1", "s2", "s3"]
+    assert res["resume_at"] is None
+    assert res["processed"] == res["total"] == 3
+
+
+def test_budget_stops_partway_and_failed_structures_still_reported(clean_log):
+    # s2 is slow enough to blow a tiny budget checked before s3.
+    resolved = [("structure", FakeUnit("s1")), ("structure", FakeUnit("s2", slow=True)),
+                ("structure", FakeUnit("s3")), ("structure", FakeUnit("s4")),
+                ("structure", FakeUnit("s5"))]
+    log, _ = clean_log(resolved)
+
+    res = FakeManipulation().transform(
+        target="document", action="clean", budget=0.02)
+    assert log[:2] == ["s1", "s2"]
+    assert "s3" not in log
+    assert res["resume_at"] == 2
+    assert res["median_seconds"] is not None
+    assert len(res["slowest"]) <= 5
+
+
+def test_single_structure_path_has_no_batch_fields(clean_log):
+    """start/limit/budget only apply to the 2+-structure batched path --
+    the single-structure branch's response shape must stay unchanged."""
+    log, _ = clean_log(_structures("s1"))
+    res = FakeManipulation().transform(target="document", action="clean",
+                                       limit=1, budget=10)
+    assert log == ["s1"]
+    assert "resume_at" not in res
+    assert "median_seconds" not in res

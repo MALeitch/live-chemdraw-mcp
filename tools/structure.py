@@ -341,17 +341,31 @@ def register(mcp, bridge):
         "carries meaning — a hand-laid-out reaction scheme, a transition "
         "state, a deliberately posed conformer — since it discards that "
         "arrangement entirely. de_novo with any other action is an error, "
-        "not a silent no-op. " + TARGET_DOC))
+        "not a silent no-op. start/limit/budget (action='clean' with a "
+        "target resolving to 2+ structures only) make a large page's clean "
+        "resumable instead of one all-or-nothing call: budget is a "
+        "wall-clock ceiling in seconds (checked before each structure, "
+        "never mid-structure) after which the call returns whatever it "
+        "finished so far plus resume_at (the index to pass back as start "
+        "on the next call); resume_at is null once every structure the "
+        "target resolved to has been attempted, across however many calls "
+        "that took. limit caps how many structures one call attempts "
+        "regardless of budget. median_seconds/slowest in the result show "
+        "which structures are actually slow, not just that the page is "
+        "big. " + TARGET_DOC))
     def chemdraw_transform(target: str = "selection", action: str = "clean",
                            dx: float = 0, dy: float = 0, degrees: float = 0,
                            factor: float = 1.0, vertical: bool = False,
                            atom_refs: list[str] | None = None,
                            bond_refs: list[str] | None = None,
-                           de_novo: bool = False) -> str:
+                           de_novo: bool = False, start: int = 0,
+                           limit: int | None = None,
+                           budget: float | None = None) -> str:
         return as_json(bridge.transform(_parse(target), action, dx=dx, dy=dy,
                                         degrees=degrees, factor=factor,
                                         vertical=vertical, atom_refs=atom_refs,
-                                        bond_refs=bond_refs, de_novo=de_novo))
+                                        bond_refs=bond_refs, de_novo=de_novo,
+                                        start=start, limit=limit, budget=budget))
 
     @mcp.tool(description=(
         "Delete structures from the document. " + TARGET_DOC +

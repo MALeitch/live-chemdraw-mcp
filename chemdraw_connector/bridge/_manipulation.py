@@ -2,7 +2,7 @@
 (move/rotate/scale/flip/clean), atom/bond editing, atom addition."""
 from .. import state, targets
 from ..com import types as t
-from ..domain import bond_split, diff
+from ..domain import batch, bond_split, diff
 from ..errors import InvalidInputError, TargetNotFoundError
 from ._plumbing import SLOW_TIMEOUT
 
@@ -124,7 +124,8 @@ class _Manipulation:
 
     def transform(self, target="selection", action="clean", dx=0.0, dy=0.0,
                       degrees=0.0, factor=1.0, vertical=False,
-                      atom_refs=None, bond_refs=None, de_novo=False):
+                      atom_refs=None, bond_refs=None, de_novo=False,
+                      start=0, limit=None, budget=None):
             """target may also be (or include) an arrow, symbol, bracket,
             tlc_plate, or (owned or unowned) caption id, not just a structure's
             — resolved via targets.resolve_any/find_removable_by_id (see that
@@ -172,6 +173,25 @@ class _Manipulation:
             is rejected rather than silently ignored — Move/Rotate/Scale/Flip
             have no such argument, so accepting it would imply a relayout
             that never happens.
+
+            start/limit/budget (action="clean" with target resolving to 2+
+            structures only — issue #27): the per-unit clean loop below
+            processes items[start:start+limit] and stops early once
+            `budget` wall-clock seconds are spent, checked before each
+            unit (never mid-unit — one unit's own Clean() call is never
+            interrupted). The result's `resume_at` is the index to pass
+            back as `start` on the next call to continue where this one
+            left off; None means every structure the target resolved to
+            has now been attempted. This exists because even the per-unit
+            fix (#24) has no ceiling on total call time — a genuinely
+            large page (hundreds-to-thousands of structures, see #28/#29)
+            can still run past chemdraw_transform's own SLOW_TIMEOUT with
+            nothing usable returned, discarding whatever units already
+            finished. `median_seconds`/`slowest` (same "which structure is
+            actually slow" diagnostic as prototypes/clean_batch.py) are
+            included so a caller can tell "this page is just big" from
+            "structure #340 is pathologically slow" before deciding
+            whether to keep paging through it.
             """
             if de_novo and action != "clean":
                 raise InvalidInputError(
@@ -272,20 +292,26 @@ class _Manipulation:
                 # Clean cost (measured 785s vs 0.8s for 24 structures).
                 # Use the same per-unit approach as _shorthand._clean_unit().
                 if action == "clean":
-                    structure_units = [(kind, obj) for kind, obj in resolved if kind == "structure"]
+                    structure_units = [obj for kind, obj in resolved if kind == "structure"]
                     if len(structure_units) > 1:
-                        transformed, failed = [], []
-                        for kind, obj in structure_units:
-                            uid = targets.ensure_id(obj)
-                            try:
-                                # Reuse _clean_unit logic: apply clean to this unit's objects only
-                                self._apply_transform_action(
-                                    targets.unit_objects(obj), "clean", 0.0, 0.0, 0.0, 1.0, False,
-                                    de_novo)
-                                transformed.append(uid)
-                            except Exception as exc:
-                                failed.append({"id": uid, "error": str(exc)})
-                        # Handle annotations (arrows, captions, etc.) - clean not supported
+                        # budget/start/limit (issue #27): see this method's
+                        # own docstring. batch.run_batch does the slicing/
+                        # timing/failure-isolation bookkeeping; the COM call
+                        # itself is the same per-unit Clean() #24 already
+                        # established (targets.unit_objects(obj).Clean(...),
+                        # via _apply_transform_action).
+                        result = batch.run_batch(
+                            structure_units,
+                            lambda obj: self._apply_transform_action(
+                                targets.unit_objects(obj), "clean", 0.0, 0.0,
+                                0.0, 1.0, False, de_novo),
+                            id_fn=targets.ensure_id,
+                            start=start, limit=limit, budget=budget)
+                        failed = list(result["failed"])
+                        # Handle annotations (arrows, captions, etc.) - clean
+                        # not supported -- reported regardless of start/
+                        # limit/budget slicing, since these were never part
+                        # of the batched structure work to begin with.
                         for kind, obj in resolved:
                             if kind != "structure":
                                 uid = targets.ensure_id(obj)
@@ -298,8 +324,14 @@ class _Manipulation:
                                         f"action='move' is supported for a {kind} target."
                                     ),
                                 })
-                        return {"transformed": transformed, "failed": failed,
-                                "action": action, "de_novo": bool(de_novo)}
+                        return {
+                            "transformed": result["succeeded"], "failed": failed,
+                            "action": action, "de_novo": bool(de_novo),
+                            "resume_at": result["resume_at"],
+                            "processed": result["processed"], "total": result["total"],
+                            "median_seconds": result["median_seconds"],
+                            "slowest": result["slowest"],
+                        }
                 
                 transformed, failed = [], []
                 for kind, obj in resolved:
@@ -355,7 +387,19 @@ class _Manipulation:
             op_description = f"transform action={action}"
             if action == "clean" and de_novo:
                 op_description += " de_novo=True"
-            return self._run(go, timeout=SLOW_TIMEOUT, op_name="transform", op_description=op_description)
+            # A caller-supplied budget (issue #27) is a promise the batch
+            # driver keeps INSIDE go() -- but the worker submission wrapping
+            # go() has its own timeout, and SLOW_TIMEOUT (45s) would cut a
+            # long budget off before the driver ever got to honor it. Scale
+            # the outer timeout to the requested budget plus slack for the
+            # pre/post-loop work (resolve_any, snapshot, response building),
+            # same "scale with the caller's own stated batch size" precedent
+            # as edit_atoms/edit_bonds. Capped, not unbounded -- an
+            # unreasonable budget shouldn't be able to wedge the worker for
+            # arbitrarily long; 600s matches this codebase's own measured
+            # real batch runs (prototypes/clean_batch.py's default example).
+            timeout = SLOW_TIMEOUT if not budget else min(budget + 15.0, 600.0)
+            return self._run(go, timeout=timeout, op_name="transform", op_description=op_description)
 
     def remove(self, target):
         def go():

@@ -503,6 +503,25 @@ through here" property is unchanged.
   own UI thread being genuinely busy; `kill_process=True` also kills (by
   the exact attached pid, avoiding the multi-instance ambiguity hazard)
   and relaunches ChemDraw for a genuine internal wedge.
+- **Budgeted, resumable batch execution for a large per-unit loop**
+  (issue #27): `domain/batch.py`'s `run_batch(items, work_fn, id_fn,
+  start, limit, budget)` is the shared driver — slice/timing/failure-
+  isolation bookkeeping in pure Python, zero COM. `budget` is checked
+  BEFORE each item, never mid-item (nothing in this codebase can
+  interrupt an in-flight COM call, see the worker-wedge entry below);
+  `resume_at` is the one field a caller loops on (`while resume_at is
+  not None: call again with start=resume_at`), covering both a spent
+  budget and a `limit` slice that didn't reach the end. Wired into
+  `chemdraw_transform(action="clean")`'s per-unit path (#24) first, since
+  that was the concretely measured case — the OUTER worker-submission
+  timeout must also scale with any caller-supplied `budget` (capped, not
+  unbounded) or `SLOW_TIMEOUT` would cut the batch off before the driver
+  itself ever got to honor the budget; see `transform`'s own `timeout =
+  SLOW_TIMEOUT if not budget else min(budget + 15.0, 600.0)` line for the
+  pattern. Not yet wired into the other per-unit-loop tools #27
+  originally scoped (contract/expand shorthand, autonumber, style
+  presets, characterization) — same driver, straightforward to reuse,
+  just not done yet.
 - `IChemDrawDocument.name` is just the basename, not the full path — two
   open documents with the same filename in different folders (a normal
   Save-As-to-a-different-folder-then-reopen cycle) is common, not exotic,
