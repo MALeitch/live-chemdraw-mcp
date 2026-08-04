@@ -336,6 +336,79 @@ def unit_atoms_bonds(doc, unit, cache=None):
     return atoms, bonds
 
 
+def bulk_unit_atoms_bonds(doc, units, cache=None):
+    """Same result as calling unit_atoms_bonds(doc, u, cache) once per u in
+    units, but for 2+ units this replaces N full doc.Atoms/doc.Bonds scans
+    with at most ONE shared pass over each collection.
+
+    Fixes a genuine O(units x atoms) COM-traffic blowup (issue #29): an
+    uncached call to unit_atoms_bonds re-scans the WHOLE document's atoms
+    and bonds just to find ONE unit's members (that's what makes a single
+    call correct and simple), so calling it once per unit on a large
+    multi-structure target — chemdraw_list_atoms(target="document") is the
+    real case that hit this — pays that full-document scan once per unit,
+    not once total. Confirmed live 2026-08-04: on a synthetic 200-structure/
+    1200-atom document, target="document" list_atoms was still running
+    after 90+ seconds (the connector's own default timeout is 15s) where
+    chemdraw_status/chemdraw_describe_canvas — which read atoms/bonds only
+    to COUNT them per unit via CDXML export, never via this per-unit
+    doc-wide rescan — stayed well under it on the same document.
+
+    Units whose cache entry is already warm (cache is not None,
+    unit_signature matches) are served straight from it, at the cost of
+    one cheap Atoms.Count/Bonds.Count read per unit (unit_signature)
+    instead of the full scan — the common case for a target whose
+    membership hasn't changed since a previous call. Only genuinely cold
+    units pay for the shared doc.Atoms/doc.Bonds pass, and that pass is
+    itself paid AT MOST ONCE for however many cold units there are, not
+    once per cold unit.
+
+    Returns {claude_id: (atoms, bonds)} for exactly the given units."""
+    out = {}
+    cold_units = []
+    cold_ids = set()
+    for u in units:
+        uid = ensure_id(u)
+        if cache is not None:
+            try:
+                sig = unit_signature(u)
+            except Exception:
+                sig = None
+            if sig is not None:
+                cached = cache.setdefault("atom_bond", {}).get(uid)
+                if cached is not None and cached[0] == sig:
+                    out[uid] = (cached[1], cached[2])
+                    continue
+        cold_units.append((u, uid))
+        cold_ids.add(uid)
+
+    if cold_units:
+        by_uid = {uid: ([], []) for _, uid in cold_units}
+        for coll, idx in ((doc.Atoms, 0), (doc.Bonds, 1)):
+            for i in range(1, coll.Count + 1):
+                item = coll.Item(i)
+                try:
+                    frag = item.Fragment
+                except Exception:
+                    continue
+                if frag is None:
+                    continue
+                fid = get_id(frag)
+                if fid in cold_ids:
+                    by_uid[fid][idx].append(item)
+        for u, uid in cold_units:
+            atoms, bonds = by_uid[uid]
+            out[uid] = (atoms, bonds)
+            if cache is not None:
+                try:
+                    sig = unit_signature(u)
+                except Exception:
+                    sig = None
+                if sig is not None:
+                    cache.setdefault("atom_bond", {})[uid] = (sig, atoms, bonds)
+    return out
+
+
 def unit_formula(unit, cache=None):
     """objs.Formula, cached per (claude_id, unit_signature) the same way
     unit_atoms_bonds caches atom/bond lists — refetch only when the unit's

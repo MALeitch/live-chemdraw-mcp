@@ -268,6 +268,90 @@ def test_doc_level_rescan_clears_atom_bond_cache():
         "a doc-level change must invalidate all cached per-unit atom/bond data"
 
 
+def make_doc_with_n_groups(n, atom_count=6, bond_count=6):
+    """n independent groups, each with its own atoms/bonds tagged to it --
+    the target="document" shape bulk_unit_atoms_bonds exists for."""
+    groups, all_atoms, all_bonds = [], [], []
+    for gid in range(1, n + 1):
+        grp = FakeUnit(gid, atom_count=atom_count, bond_count=bond_count)
+        targets.ensure_id(grp)
+        groups.append(grp)
+        all_atoms.extend(FakeAtom(grp) for _ in range(atom_count))
+        all_bonds.extend(FakeBond(grp) for _ in range(bond_count))
+    doc = FakeDoc(groups=groups, atoms=all_atoms, bonds=all_bonds)
+    return doc, groups
+
+
+# ---------- bulk_unit_atoms_bonds ----------
+
+def test_bulk_unit_atoms_bonds_correctness_matches_per_unit_calls():
+    doc, groups = make_doc_with_n_groups(5, atom_count=3, bond_count=2)
+    by_uid = targets.bulk_unit_atoms_bonds(doc, groups)
+    for g in groups:
+        uid = targets.get_id(g)
+        atoms, bonds = by_uid[uid]
+        assert len(atoms) == 3 and len(bonds) == 2
+        assert all(a.Fragment is g for a in atoms)
+        assert all(b.Fragment is g for b in bonds)
+
+
+def test_bulk_unit_atoms_bonds_scans_doc_once_not_once_per_unit():
+    n = 20
+    doc, groups = make_doc_with_n_groups(n, atom_count=6, bond_count=6)
+    targets.bulk_unit_atoms_bonds(doc, groups)
+    # ONE pass over doc.Atoms (n*6 items) and ONE over doc.Bonds (n*6 items)
+    # -- NOT n passes (which unit_atoms_bonds called once per unit, on an
+    # uncached target, would cost: n * n*6 Item() calls, the O(units x
+    # atoms) blowup issue #29 is about).
+    assert doc.Atoms.item_calls == n * 6
+    assert doc.Bonds.item_calls == n * 6
+
+
+def test_bulk_unit_atoms_bonds_uses_warm_cache_without_rescanning():
+    doc, groups = make_doc_with_n_groups(10, atom_count=4, bond_count=3)
+    cache = {}
+    # Warm the cache for every unit individually first (as e.g. a prior
+    # call would have).
+    for g in groups:
+        targets.unit_atoms_bonds(doc, g, cache)
+    calls_before = doc.Atoms.item_calls
+    by_uid = targets.bulk_unit_atoms_bonds(doc, groups, cache)
+    assert doc.Atoms.item_calls == calls_before, \
+        "every unit was already cached -- bulk call must not touch doc.Atoms.Item() at all"
+    assert len(by_uid) == 10
+    for g in groups:
+        atoms, bonds = by_uid[targets.get_id(g)]
+        assert len(atoms) == 4 and len(bonds) == 3
+
+
+def test_bulk_unit_atoms_bonds_mixed_warm_and_cold_units():
+    doc, groups = make_doc_with_n_groups(6, atom_count=2, bond_count=1)
+    cache = {}
+    # Warm only the first 3.
+    for g in groups[:3]:
+        targets.unit_atoms_bonds(doc, g, cache)
+    calls_before = doc.Atoms.item_calls
+    by_uid = targets.bulk_unit_atoms_bonds(doc, groups, cache)
+    # The cold half still triggers exactly one shared scan (not one per
+    # cold unit): total item_calls grows by one doc.Atoms.Count pass.
+    assert doc.Atoms.item_calls == calls_before + doc.Atoms.Count
+    for g in groups:
+        atoms, bonds = by_uid[targets.get_id(g)]
+        assert len(atoms) == 2 and len(bonds) == 1
+
+
+def test_bulk_unit_atoms_bonds_populates_per_unit_cache_for_later_single_calls():
+    doc, groups = make_doc_with_n_groups(4, atom_count=2, bond_count=1)
+    cache = {}
+    targets.bulk_unit_atoms_bonds(doc, groups, cache)
+    calls_before = doc.Atoms.item_calls
+    # A later single-unit call must hit the cache the bulk call populated,
+    # not rescan.
+    atoms, bonds = targets.unit_atoms_bonds(doc, groups[0], cache)
+    assert len(atoms) == 2 and len(bonds) == 1
+    assert doc.Atoms.item_calls == calls_before
+
+
 def test_unit_without_objects_is_never_cached():
     class NoObjectsUnit:
         ID = 99

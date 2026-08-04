@@ -59,8 +59,13 @@ class _StubBridge(manip._Manipulation):
 def _patch_common(monkeypatch, unit_atoms_bonds_map):
     monkeypatch.setattr(manip.targets, "resolve",
                         lambda d, t, c: list(unit_atoms_bonds_map.keys()))
-    monkeypatch.setattr(manip.targets, "unit_atoms_bonds",
-                        lambda d, u, c: unit_atoms_bonds_map[u])
+    # list_atoms_bonds calls bulk_unit_atoms_bonds (keyed by claude_id, the
+    # ensure_id below), not unit_atoms_bonds per unit -- see issue #29's
+    # fix (targets.py) for why the per-unit version is no longer used
+    # here.
+    monkeypatch.setattr(
+        manip.targets, "bulk_unit_atoms_bonds",
+        lambda d, units, c: {u.ID: unit_atoms_bonds_map[u] for u in units})
     monkeypatch.setattr(manip.targets, "ensure_id", lambda u: u.ID)
     monkeypatch.setattr(manip.targets, "atom_ref", lambda a: a._ref)
     monkeypatch.setattr(manip.targets, "bond_ref", lambda b: b._ref)

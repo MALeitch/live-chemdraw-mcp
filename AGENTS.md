@@ -467,6 +467,22 @@ through here" property is unchanged.
     `doc.Groups`, a TLC plate never inflates `chemdraw_status`/
     `chemdraw_describe_canvas` structure counts — confirmed live, same as
     Brackets/Arrows/Symbols.
+- **Never call `targets.unit_atoms_bonds` once per unit in a loop over
+  many units.** It resolves ONE unit's atoms/bonds by scanning the WHOLE
+  `doc.Atoms`/`doc.Bonds` collections and filtering by fragment tag —
+  correct and necessary for a single unit (there's no COM shortcut to ask
+  "just this unit's atoms" directly, see the `.Item()`-on-a-group-scoped-
+  collection crash warning above), but calling it per unit over a big
+  `target="document"` multiplies that full-document scan by the unit
+  count. Confirmed live 2026-08-04 (issue #29): on a synthetic 200-
+  structure/1200-atom document, `chemdraw_list_atoms(target="document")`
+  was still running after 5+ minutes (`chemdraw_status(fast=true)`'s
+  `elapsed` climbing continuously — a genuine O(units x atoms) blowup, not
+  a wedge). Use `targets.bulk_unit_atoms_bonds(doc, units, cache)` instead
+  for any multi-unit target — one shared pass over `doc.Atoms`/
+  `doc.Bonds`, bucketed by fragment tag, paid at most once for however
+  many units are cache-cold (cache-warm units are served from cache
+  either way, at the same cost as the per-unit function).
 - `IChemDrawDocument.name` is just the basename, not the full path — two
   open documents with the same filename in different folders (a normal
   Save-As-to-a-different-folder-then-reopen cycle) is common, not exotic,

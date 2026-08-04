@@ -442,9 +442,19 @@ class _Manipulation:
         def go():
             doc = self._doc()
             cache = self._cache_for(doc)
+            units = targets.resolve(doc, target, cache)
+            # bulk_unit_atoms_bonds, not a unit_atoms_bonds call per unit:
+            # the per-unit version re-scans doc.Atoms/doc.Bonds in full for
+            # EVERY unit it's asked about when uncached, so a per-unit loop
+            # over a big target="document" pays that full-document scan
+            # once per structure -- confirmed live to blow well past this
+            # call's own timeout on a 200-structure/1200-atom document
+            # (issue #29). bulk_unit_atoms_bonds does the equivalent shared
+            # scan at most once for the whole target instead.
+            atoms_bonds_by_uid = targets.bulk_unit_atoms_bonds(doc, units, cache)
             out = []
-            for u in targets.resolve(doc, target, cache):
-                atoms, bonds = targets.unit_atoms_bonds(doc, u, cache)
+            for u in units:
+                atoms, bonds = atoms_bonds_by_uid[targets.ensure_id(u)]
                 atom_entries = []
                 for i, a in enumerate(atoms, start=1):
                     if wanted_numbers is not None and a.ElementNumber not in wanted_numbers:

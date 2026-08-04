@@ -69,7 +69,14 @@ class _DocumentSession:
                         {"box_index": None, "structure_count": unboxed})
                 info["chemical_warnings"] = doc.NumChemicalWarnings
             return info
-        return self._run(go, op_name="status", op_description="status check")
+        # SLOW_TIMEOUT (45s), not the 15s default: this reads the whole
+        # document via state.build_snapshot, same cost driver as
+        # describe_canvas (which already uses SLOW_TIMEOUT) -- confirmed
+        # live 2026-08-04 that a cold-cache call on a 200-structure
+        # synthetic document exceeded the 15s default (though it finished
+        # legitimately in the background; a warm-cache retry was instant).
+        # Issue #29.
+        return self._run(go, timeout=SLOW_TIMEOUT, op_name="status", op_description="status check")
 
     def new_document(self):
         def go():
