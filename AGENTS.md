@@ -266,6 +266,28 @@ through here" property is unchanged.
   clears it on each acquisition.
 - Coordinates are points (72/inch), top-left origin; default bond length is
   14.4 pt. Backups land in `%LOCALAPPDATA%\chemdraw-mcp\backups`.
+- **Bulk structure operations belong in the domain layer, not one COM call
+  per structure.** If a tool needs to touch every structure on a large page
+  (clean, contract/expand shorthand, dense packing, ...), read/write CDXML
+  directly in `domain/` and touch ChemDraw once at the boundary (a single
+  open/save/export), rather than looping a live per-object COM call over
+  many units in one `_run` closure — that pattern reliably wedges the
+  worker on a big enough document (see the "never loop a mutating COM call"
+  entry above). `domain/highlight_cdxml.py`, `domain/cdx_binary.py`, and
+  `domain/dense_pack.py` all independently converged on this shape.
+- A path currently open in ChemDraw is OS-locked for writes from anywhere
+  else (including a plain external Python script, not just this connector)
+  until it's closed in ChemDraw first — an external write against an
+  open-in-ChemDraw path fails with a bare `PermissionError` that gives no
+  hint why.
+- `chemdraw_save_document` is **not geometry-lossless** for a CDXML page
+  authored outside ChemDraw with `DrawingSpace="Poster"` and explicit
+  `Width`/`Height`: once opened and saved, those attributes are replaced
+  with ChemDraw's own paginated-layout attributes (`BoundingBox`,
+  `WidthPages`). If you need to keep reading a page's own geometry after a
+  save, keep your pre-save copy as the source of truth and only push the
+  ChemDraw-touched copy forward for rendering/viewing, never for further
+  programmatic reads of `Width`/`Height`/`DrawingSpace`.
 - `IChemDrawArrow.ArrowHeadType` does **not** take the `CDArrowType` bitmask
   its name suggests (`NoHead`/`HalfHead`/`FullHead`/`Resonance`/
   `Equilibrium`/`Hollow`/`RetroSynthetic`) — that assumption, made from
